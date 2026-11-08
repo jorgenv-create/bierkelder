@@ -9,5 +9,13 @@
 .shop-options .secondary { max-width: 100%; min-height: 36px; padding: 6px 12px; overflow-wrap: anywhere; }
 .shop-options .secondary[aria-pressed="true"] { background: #e4ecdf; color: #24402a; border-color: #70866a; }
 .beer-value { margin-top: 7px; color: #355a3f; font-size: 12px; font-weight: 700; }
+.beer-card { position: relative; }
+.beer-card-open { position: absolute; inset: 0; z-index: 1; }
+.beer-card-open:focus-visible { outline-offset: -4px; }
+.shop-price-link { display: inline-flex; align-items: center; gap: 4px; text-decoration: underline; text-underline-offset: 3px; }
+.beer-value .shop-price-link { position: relative; z-index: 2; }
+.price-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: -8px 0 20px; font-size: 12px; color: #50634d; }
+.price-tools [role="status"]:not(:empty) { flex-basis: 100%; }
+.beer-vintage { display: inline-block; width: fit-content; max-width: 100%; margin: 8px 0 3px; padding: 3px 9px; border-radius: 6px; background: #e8eee4; color: #264833; font: 700 14px/1.35 Arial, sans-serif; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .value-source { display: block; margin-top: 4px; color: #586950; line-height: 1.45; }
 .value-source a { text-decoration: underline; }

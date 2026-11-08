@@ -8,6 +8,7 @@ await mkdir(path.join(out,'public'),{recursive:true});
 await build({entryPoints:[path.join(root,'selfhost/main.tsx')],outdir:path.join(out,'public'),bundle:true,minify:true,splitting:true,format:'esm',platform:'browser',target:'es2022',jsx:'automatic',define:{'process.env.NODE_ENV':'"production"'},plugins:[{name:'plain-cellar-css',setup(b){b.onLoad({filter:/app[\\/]globals\.css$/},async args=>({contents:(await readFile(args.path,'utf8')).replace('@import "tailwindcss";',''),loader:'css'}));}}]});
 await build({entryPoints:[path.join(root,'app/beer.ts')],outfile:path.join(out,'schema.mjs'),bundle:true,minify:true,format:'esm',platform:'node',target:'node24'});
 await copyFile(path.join(root,'selfhost/server.mjs'),path.join(out,'server.mjs'));
+await copyFile(path.join(root,'selfhost/shop-prices.mjs'),path.join(out,'shop-prices.mjs'));
 await copyFile(path.join(root,'LICENSE'),path.join(out,'LICENSE'));
 const lock=JSON.parse(await readFile(path.join(root,'package-lock.json'),'utf8'));
 const notices=[];
