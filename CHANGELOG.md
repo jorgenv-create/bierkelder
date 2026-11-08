@@ -6,6 +6,7 @@
 
 - Groepen standaard, met een schakelaar naar losse bierkaarten en sortering op jaargang.
 - Per bier keuze tussen een online afbeelding en de eigen foto.
+- Mobiele kaarten tonen dezelfde gegevens in een leesbare weergave met één kolom op telefoons.
 - Optionele openbare collectie met kaarten, groepen, foto’s en algemene Untappd-scores. Aankoopgegevens, notities, persoonlijke scores en prijzen blijven afgeschermd.
 
 ### Untappd en wishlist
