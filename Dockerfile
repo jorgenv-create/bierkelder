@@ -5,6 +5,7 @@ RUN npm ci --no-audit --no-fund
 COPY app ./app
 COPY public ./public
 COPY selfhost ./selfhost
+ARG BIERKELDER_EXTENSION_ORIGIN=http://127.0.0.1:3080
 RUN npm run build && npm test
 
 FROM node:24-bookworm-slim
