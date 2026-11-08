@@ -18,7 +18,7 @@ jobs:
       - name: Start a fresh container
         run: |
           docker run -d --name bierkelder-ci -p 127.0.0.1:3080:3000 -v bierkelder-ci:/data bierkelder:ci
-          curl --fail --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:3080/health
+          curl --fail --retry 10 --retry-all-errors --retry-delay 1 http://127.0.0.1:3080/health || { docker logs bierkelder-ci; exit 1; }
           curl --fail http://127.0.0.1:3080/api/session | grep -F '"configured":false'
 
   publish:
