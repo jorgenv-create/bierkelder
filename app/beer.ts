@@ -1,18 +1,13 @@
 import { z } from 'zod';
+import { untappdBeerLink, untappdPageSchema } from './untappd';
+export { untappdBeerLink, untappdCatalogSchema, untappdPageSyncSchema, untappdSyncKey } from './untappd';
 const day = z.string().regex(/^$|^\d{4}-\d{2}-\d{2}$/);
 const drinkYear = z.number().int().min(1900).max(2199).optional();
 const link = z.string().max(1000).refine(v => !v || /^https:\/\//.test(v), 'Gebruik een https-link');
 export const maxPhotoLength = 200_000;
 const photo = z.string().max(maxPhotoLength).regex(/^data:image\/jpeg;base64,\/9j\/[A-Za-z0-9+/]*={0,2}$/, 'Gebruik een geldige JPEG-foto');
 const untappdLink = z.string().trim().max(1000).refine(value => {
-  if (!value) return true;
-  try {
-    const url = new URL(value);
-    return ['https://untappd.com', 'https://www.untappd.com'].includes(url.origin)
-      && !url.username && !url.password && /^\/b\/[^/]+\/\d+\/?$/.test(url.pathname);
-  } catch {
-    return false;
-  }
+  return !value||(/^https:\/\//.test(value)&&!!untappdBeerLink(value));
 }, 'Gebruik de HTTPS-link naar de bierpagina op Untappd');
 export const beerSchema = z.object({
   id: z.string().uuid(), name: z.string().trim().min(1).max(160), brewery: z.string().max(160), style: z.string().max(100),
@@ -21,7 +16,11 @@ export const beerSchema = z.object({
   purchaseDate: day, price: z.number().min(0).max(100000).nullable(), shop: z.string().max(200), location: z.string().max(160),
   drinkDate: day, drinkFromYear: drinkYear, drinkUntilYear: drinkYear, bestBefore: day,
   notes: z.string().max(5000), image: link, source: link, untappdUrl: untappdLink.optional(),
+  untappdAutoMatch:z.boolean().optional(),untappdCommunityRating:z.number().min(0.1).max(5).nullable().optional(),
+  untappdDescription:z.string().trim().max(1200).optional(),
+  untappdPage:z.object({key:z.string().max(1600),data:untappdPageSchema}).optional(),
   photo: photo.nullable().optional(), hasPhoto: z.boolean().optional(),
+  photoPreference: z.enum(['online','own']).optional(),
   createdAt: z.string().datetime(), updatedAt: z.string().datetime()
 }).refine(b => b.quantity <= b.purchasedQuantity, 'Voorraad mag niet groter zijn dan het aangekochte aantal')
   .refine(({drinkFromYear, drinkUntilYear}) => (
