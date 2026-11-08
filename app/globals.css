@@ -70,3 +70,18 @@ a.nav-item { text-decoration: none; }
 .beer-group > .beer-grid { padding:0 12px 12px; }
 .year-chips { display:flex; flex-wrap:wrap; gap:5px; }
 .year-chips .beer-vintage { margin:5px 0 0; }
+
+@media(max-width:560px) {
+ .beer-grid { grid-template-columns:minmax(0,1fr); }
+ .beer-card .beer-content { min-width:0; padding:16px 16px 0; }
+ .beer-card h3 { overflow-wrap:anywhere; }
+ .beer-card .beer-type,.beer-card .beer-content p,.beer-card .beer-meta,
+ .beer-card .beer-foot span,.beer-card .quantity-tag,.beer-card .ready-tag { font-size:12px; }
+ .beer-card .beer-meta { flex-direction:row; flex-wrap:wrap; }
+ .beer-card .beer-rating,.beer-card .beer-value { font-size:13px; }
+ .list-view .beer-card .ready-tag { display:block; max-width:calc(100% - 12px); left:6px; font-size:10px; }
+ .modal .detail-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .modal .detail-grid dt { font-size:12px; }
+ .modal .detail-grid dd { font-size:14px; }
+ .modal .detail-hero ~ .form-bottom { position:static; flex-wrap:wrap; padding-bottom:0; }
+}
