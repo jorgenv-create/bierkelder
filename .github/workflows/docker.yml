@@ -1,0 +1,42 @@
+name: Docker
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build and test
+        run: docker build --tag bierkelder:ci .
+      - name: Start a fresh container
+        run: |
+          docker run -d --name bierkelder-ci -p 127.0.0.1:3080:3000 -v bierkelder-ci:/data bierkelder:ci
+          curl --fail --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:3080/health
+          curl --fail http://127.0.0.1:3080/api/session | grep -F '"configured":false'
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Publish Linux images
+        env:
+          IMAGE: docker.io/${{ vars.DOCKERHUB_USERNAME }}/bierkelder
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          docker buildx build --platform linux/amd64,linux/arm64 --tag "$IMAGE:$VERSION" --tag "$IMAGE:latest" --push .
