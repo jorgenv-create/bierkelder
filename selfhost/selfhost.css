@@ -3,3 +3,21 @@
 .photo-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .photo-preview { width: 92px; height: 110px; border-radius: 6px; object-fit: contain; background: #eff0e5; }
 .detail-hero > img { width: min(30%, 100px); max-height: 130px; object-fit: contain; border-radius: 6px; }
+
+.public-cellar { min-height: 100vh; }
+.public-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px clamp(18px, 5vw, 64px); border-bottom: 1px solid var(--line); background: #fdfcf9; }
+.public-main { max-width: 1050px; margin-inline: auto; padding: clamp(30px, 6vw, 70px) clamp(18px, 5vw, 64px); }
+.public-main > p { color: #50634d; }
+.public-search { margin: 25px 0 18px; max-width: 430px; }
+.public-beers { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; }
+.public-beers li { padding: 18px 20px; border: 1px solid var(--line); border-radius: 9px; background: #fdfcf9; }
+.public-beers h2 { margin: 5px 0; font: 22px Georgia, serif; overflow-wrap: anywhere; }
+.public-beers p { color: #50634d; }
+.price-history > h1 { margin-top: 20px; }
+.price-history > p { margin: 12px 0; }
+.price-selection { display: grid; gap: 5px; font-weight: 700; margin: 24px 0 10px; max-width: 620px; }
+.price-selection select { width: 100%; padding: 9px; border: 1px solid var(--line); border-radius: 6px; background: white; color: var(--ink); }
+.price-history h2 { margin-top: 24px; font-size: 18px; }
+.price-chart { display: block; width: 100%; max-width: 620px; margin: 10px 0; color: #39684e; background: #eef3e9; border-radius: 8px; }
+.price-history table { margin: 18px 0; width: 100%; border-collapse: collapse; background: #fdfcf9; }
+.price-history th, .price-history td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); }

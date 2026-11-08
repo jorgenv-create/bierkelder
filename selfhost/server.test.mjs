@@ -8,8 +8,10 @@ import http from 'node:http';
 import {randomBytes} from 'node:crypto';
 import {once} from 'node:events';
 import {createBierServer,lookupBarcode} from '../dist-selfhost/server.mjs';
+import {fetchShopPrices,priceKey} from '../dist-selfhost/shop-prices.mjs';
 import {emptyBeer,beerSchema} from '../dist-selfhost/schema.mjs';
 import {drinkStart,suggestDrinkWindow} from '../app/drink-window.ts';
+import {bottleValue,stockValue} from '../app/beer-value.ts';
 test('handmatige invoer werkt ook op een lokaal HTTP-adres zonder randomUUID',()=>{
  const previous=Object.getOwnPropertyDescriptor(globalThis.crypto,'randomUUID');
  Object.defineProperty(globalThis.crypto,'randomUUID',{value:undefined,configurable:true});
@@ -24,6 +26,47 @@ test('drinkvenster gebruikt bronadvies, behoudt oudere planningen en laat onbeke
  assert.equal(suggestDrinkWindow({...beer,name:'Onbekend bier'}),null);
  assert.equal(drinkStart({...beer,drinkDate:'2027-05-12'}),'2027-05-12');
  assert.equal(drinkStart({...beer,drinkFromYear:2028}),'2028-01-01');
+});
+test('Black Label gebruikt de winkelprijs voor de juiste editie en flesinhoud',()=>{
+ const beers=[
+  {...emptyBeer(),brewery:'Brouwerij Boon',name:'Boon Oude Gueuze Black Label Edition N°4 – 75 cl',price:3,quantity:2},
+  {...emptyBeer(),brewery:'Boon',name:'Oude Geuze Boon Black Label 5th Edition',price:3},
+  {...emptyBeer(),brewery:'Boon',name:'Black Label nr. 06 (2020)',price:3},
+ ];
+ const prices=beers.map(beer=>bottleValue(beer));
+ assert.deepEqual(prices.map(price=>price.amount),[21.50,19.50,18]);
+ assert.ok(prices.every(price=>price.kind==='Winkelprijs'&&price.evidence.source==='Huis van de Geuze'));
+ assert.deepEqual(stockValue(beers),{amount:80.50,unknown:0});
+ for(const beer of [{...beers[0],volume:375},{...beers[1],brewery:'Andere brouwerij'},{...beers[2],name:'Black Label'}]){
+  assert.deepEqual(bottleValue(beer),{amount:3,kind:'Aankoopprijs',evidence:null});
+ }
+ const checkedAt='2026-11-09T10:00:00.000Z';
+ const key=priceKey(beers[0]);
+ const offer={amount:25,url:'https://www.huisvandegeuze.be/winkel/boon-4/',source:'Huis van de Geuze',checkedAt};
+ const live={checkedAt,keys:beers.map(priceKey),offers:{[key]:offer}};
+ assert.equal(bottleValue(beers[0],live).evidence.url,offer.url);
+ assert.equal(bottleValue(beers[1],live).kind,'Aankoopprijs');
+ assert.deepEqual(stockValue(beers,live),{amount:56,unknown:0});
+});
+const shopProduct={name:'Boon Oude Geuze Black Label Edition N°4 &#8211; 75 cl',type:'simple',permalink:'https://www.huisvandegeuze.be/winkel/boon-4/',is_in_stock:true,is_purchasable:true,attributes:[{name:'Merken',terms:[{name:'Boon'}]}],prices:{price:'2450',currency_code:'EUR',currency_minor_unit:2}};
+const pricedBeer={...emptyBeer(),name:'Oude Geuze Boon Black Label #4',brewery:'Brouwerij Boon',vintage:'2017'};
+test('winkelprijzen vergelijken beide webshops en houden inhoud en jaargang uit elkaar',async()=>{
+ const newer={...pricedBeer,vintage:'2018'};
+ const geuze={...pricedBeer,name:'Oude Geuze',vintage:'2024'};
+ const otherYear={...geuze,vintage:'2023'};
+ const secondUrl='https://geuzeshop.com/shop/boon-4/';
+ const snapshot=await fetchShopPrices([pricedBeer,newer,geuze,otherYear,{...pricedBeer,volume:375}],async input=>{
+  const url=new URL(input);
+  if(url.hostname==='geuzeshop.com')return Response.json([{...shopProduct,permalink:secondUrl,prices:{...shopProduct.prices,price:'2200'}}]);
+  assert.equal(url.hostname,'www.huisvandegeuze.be');
+  return Response.json([shopProduct,{...shopProduct,name:'Boon Oude Geuze 75cl (2024)',permalink:'https://www.huisvandegeuze.be/winkel/boon-2024/'},
+   {...shopProduct,name:'Boon Oude Geuze 75cl (2023)',is_in_stock:false}]);
+ });
+ assert.equal(Object.keys(snapshot.offers).length,2);
+ assert.equal(snapshot.offers[priceKey(pricedBeer)].amount,22);
+ assert.equal(snapshot.offers[priceKey(pricedBeer)].url,secondUrl);
+ assert.equal(snapshot.offers[priceKey(geuze)].amount,24.50);
+ await assert.rejects(fetchShopPrices([pricedBeer],async()=>new Response(null,{status:503})));
 });
 test('barcode zoekt eerst bij Open Food Facts en gebruikt alleen een exacte tweede match',async()=>{
  const code='5410041001238';
@@ -49,7 +92,9 @@ test('selfhost: lokale setup, sessies, autorisatie, opslag en herstart',async()=
  const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(r=>socket.close(r));
  const origin='http://127.0.0.1:'+port,publicOrigin='https://bier.example.com';
  const dataDir=mkdtempSync(path.join(tmpdir(),'bierkelder-test-'));let lookups=0;
- const config={dataDir,localOrigin:origin,publicOrigin,allowSetup:true,lookup:async code=>{lookups++;return {name:'Testbier',barcode:code};}};
+ let shopAvailable=true;
+ const config={dataDir,localOrigin:origin,publicOrigin,allowSetup:true,publicCollection:true,lookup:async code=>{lookups++;return {name:'Testbier',barcode:code};},
+  shopFetcher:async()=>shopAvailable?Response.json([shopProduct]):new Response(null,{status:503})};
  let server=createBierServer(config);
  async function start(){server.listen(port,'127.0.0.1');await once(server,'listening');}
  async function stop(){server.closeAllConnections();await new Promise(r=>server.close(r));}
@@ -58,6 +103,8 @@ test('selfhost: lokale setup, sessies, autorisatie, opslag en herstart',async()=
  try{
   await start();running=true;
   assert.equal((await request('/api/beers')).status,401);
+  assert.deepEqual(await (await request('/api/public/beers')).json(),[]);
+  assert.equal((await request('/api/shop-prices',{method:'POST'})).status,401);
   assert.equal((await request('/api/session')).status,200);
   const password=randomBytes(24).toString('base64url'),credentials={username:'testgebruiker',password};
   assert.equal((await request('/api/setup',{method:'POST',data:credentials,originHeader:publicOrigin,host:'bier.example.com'})).status,403,'setup via openbaar adres moet geweigerd worden');
@@ -77,16 +124,34 @@ test('selfhost: lokale setup, sessies, autorisatie, opslag en herstart',async()=
   assert.equal((await request('/api/beers',{method:'POST',data:beer,cookie,originHeader:'https://evil.example'})).status,403);
   assert.equal((await request('/api/beers',{method:'POST',data:{...beer,quantity:-1},cookie})).status,400);
   assert.equal((await request('/api/beers',{method:'POST',data:beer,cookie})).status,200);
-  assert.equal((await (await request('/api/beers',{cookie})).json())[0].drinkDate,'2028-07-01');
+  const publicList=await (await request('/api/public/beers')).json();
+  assert.deepEqual(publicList,[{name:beer.name,brewery:beer.brewery,style:beer.style,vintage:beer.vintage}]);
+  assert.equal((await request('/api/beers',{method:'POST',data:beer})).status,401);
+  assert.equal((await request('/api/public/beers',{method:'POST',data:beer})).status,401);
+  assert.equal((await request('/api/shop-prices',{method:'POST',cookie,originHeader:'https://evil.example'})).status,403);
+  assert.equal((await request('/api/price-history?key=test')).status,401);
+  assert.equal((await request('/api/beers',{method:'POST',data:pricedBeer,cookie})).status,200);
+  const refresh=await request('/api/shop-prices',{method:'POST',cookie});
+  assert.equal(refresh.status,200);
+  const snapshot=await refresh.json();
+  const priceId=priceKey(pricedBeer);
+  const historyPath='/api/price-history?key='+encodeURIComponent(priceId);
+  assert.equal(snapshot.offers[priceId].amount,24.50);
+  assert.deepEqual(await (await request(historyPath,{cookie})).json(),[snapshot.offers[priceId]]);
+  assert.equal((await request('/api/shop-prices',{method:'POST',cookie})).status,429);
+  assert.equal((await (await request('/api/beers',{cookie})).json()).find(item=>item.id===beer.id).drinkDate,'2028-07-01');
   assert.equal((await request('/api/beers',{method:'POST',data:{...beer,drinkFromYear:2029},cookie})).status,400);
   assert.equal((await request('/api/beers',{method:'POST',data:{...beer,...window,drinkUntilYear:2027},cookie})).status,400);
   assert.equal((await request('/api/beers',{method:'POST',data:{...beer,untappdUrl:'https://untappd.com.example/b/beer/1254816'},cookie})).status,400);
   assert.equal((await request('/api/beers',{method:'POST',data:{...beer,photo:'data:image/svg+xml;base64,AAAA'},cookie})).status,400);
   assert.equal((await request('/api/beers',{method:'POST',data:{...beer,...window,drinkDate:'',untappdUrl,photo},cookie})).status,200);
   assert.equal((await request(photoPath)).status,401);
-  await stop();running=false;server=createBierServer(config);await start();running=true;
+  await stop();running=false;shopAvailable=false;server=createBierServer(config);await start();running=true;
+  assert.equal((await request('/api/shop-prices',{method:'POST',cookie})).status,502);
+  assert.deepEqual(await (await request('/api/shop-prices',{cookie})).json(),snapshot);
+  assert.deepEqual(await (await request(historyPath,{cookie})).json(),[snapshot.offers[priceId]]);
   assert.equal((await (await request('/api/session',{cookie})).json()).authenticated,true,'sessie moet herstart overleven');
-  const restored=await (await request('/api/beers',{cookie})).json();assert.equal(restored.length,1);assert.equal(restored[0].price,4);
+  const restored=(await (await request('/api/beers',{cookie})).json()).filter(item=>item.id===beer.id);assert.equal(restored.length,1);assert.equal(restored[0].price,4);
   assert.equal(restored[0].untappdUrl,untappdUrl);
   assert.equal(restored[0].drinkFromYear,2029);
   assert.equal(restored[0].drinkUntilYear,2035);

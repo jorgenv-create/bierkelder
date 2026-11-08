@@ -6,6 +6,7 @@ import {mkdirSync,readFileSync,statSync,chmodSync} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {beerSchema,maxPhotoLength} from './schema.mjs';
+import {fetchShopPrices,priceKey} from './shop-prices.mjs';
 const scrypt=promisify(scryptCallback);
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const COOKIE='bierkelder_session';
@@ -56,6 +57,7 @@ export function createBierServer(options={}) {
  const publicHost=publicOrigin?new URL(publicOrigin).host:'';
  if(publicOrigin&&new URL(publicOrigin).protocol!=='https:')throw Error('PUBLIC_ORIGIN moet een HTTPS-adres zijn.');
  const localOrigin=options.localOrigin||process.env.LOCAL_ORIGIN||'http://127.0.0.1:3080';
+ const publicCollection=options.publicCollection??process.env.PUBLIC_COLLECTION==='true';
  const allowSetup=options.allowSetup??process.env.ALLOW_SETUP==='true';
  const origins=options.origins||new Set([publicOrigin,localOrigin]);
  const staticDir=options.staticDir||path.join(import.meta.dirname,'public');
@@ -65,7 +67,10 @@ export function createBierServer(options={}) {
  db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;');
  db.exec(`CREATE TABLE IF NOT EXISTS account(id INTEGER PRIMARY KEY CHECK(id=1), username TEXT NOT NULL, salt TEXT NOT NULL, password_hash TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, expires INTEGER NOT NULL);
- CREATE TABLE IF NOT EXISTS beers(id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL);`);
+ CREATE TABLE IF NOT EXISTS beers(id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS shop_prices(id INTEGER PRIMARY KEY CHECK(id=1), snapshot TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS price_observations(beer_key TEXT NOT NULL, checked_at TEXT NOT NULL,
+  amount REAL NOT NULL, source TEXT NOT NULL, url TEXT NOT NULL, PRIMARY KEY(beer_key,checked_at));`);
  const getAccount=()=>db.prepare('SELECT * FROM account WHERE id=1').get();
  const windows=new Map();
  function allow(key,count,ms){const now=Date.now();let v=windows.get(key);if(!v||v.until<=now){v={n:0,until:now+ms};windows.set(key,v);}v.n++;if(windows.size>1000)for(const [k,s]of windows)if(s.until<=now)windows.delete(k);return v.n<=count;}
@@ -84,6 +89,37 @@ export function createBierServer(options={}) {
  const lookup=options.lookup||(code=>lookupBarcode(code,{canFallback:()=>allow('barcode-fallback',6,60000)}));
  const cached=new Map();
  const getPhoto=db.prepare("SELECT json_extract(data,'$.photo') AS photo FROM beers WHERE id=?");
+ const publicBeers=db.prepare(`SELECT DISTINCT json_extract(data,'$.name') AS name,
+  coalesce(json_extract(data,'$.brewery'),'') AS brewery,
+  coalesce(json_extract(data,'$.style'),'') AS style,
+  coalesce(json_extract(data,'$.vintage'),'') AS vintage
+  FROM beers WHERE json_extract(data,'$.quantity')>0 ORDER BY name COLLATE NOCASE`);
+ const readPrices=db.prepare('SELECT snapshot FROM shop_prices WHERE id=1');
+ const savePrices=db.prepare('INSERT INTO shop_prices(id,snapshot) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET snapshot=excluded.snapshot');
+ const activeForPrices=db.prepare(`SELECT json_extract(data,'$.name') AS name,json_extract(data,'$.brewery') AS brewery,
+  json_extract(data,'$.volume') AS volume,json_extract(data,'$.vintage') AS vintage
+  FROM beers WHERE json_extract(data,'$.quantity')>0`);
+ const recordPrice=db.prepare('INSERT INTO price_observations(beer_key,checked_at,amount,source,url) VALUES(?,?,?,?,?)');
+ const readHistory=db.prepare('SELECT checked_at AS checkedAt,amount,source,url FROM price_observations WHERE beer_key=? ORDER BY checked_at DESC LIMIT 200');
+ const latestPrices=()=>JSON.parse(readPrices.get()?.snapshot||'null');
+ function commitPriceRefresh(snapshot){
+  const found=Object.entries(snapshot.offers);
+  const failedSources=new Set(snapshot.sources.filter(source=>!source.available).map(source=>source.name));
+  const previous=latestPrices()?.offers;
+  if(previous&&failedSources.size){
+   for(const key of snapshot.keys){
+    if(!snapshot.offers[key]&&failedSources.has(previous[key]?.source))snapshot.offers[key]=previous[key];
+   }
+  }
+  db.exec('BEGIN');
+  try{
+   for(const [key,offer] of found)recordPrice.run(key,offer.checkedAt,offer.amount,offer.source,offer.url);
+   savePrices.run(JSON.stringify(snapshot));
+   db.exec('COMMIT');
+   return snapshot;
+  }catch(error){db.exec('ROLLBACK');throw error;}
+ }
+ let priceRefresh=null;
  const server=http.createServer(async(req,res)=>{
   for(const [key,value]of Object.entries(security))res.setHeader(key,value);
   try{
@@ -96,7 +132,7 @@ export function createBierServer(options={}) {
    if(requestOrigin===publicOrigin)res.setHeader('Strict-Transport-Security','max-age=31536000');
    const isLocal=requestOrigin===localOrigin;
    if(req.method!=='GET'&&req.method!=='HEAD'&&req.headers.origin!==requestOrigin)return json(res,403,{error:'Ongeldige herkomst van de aanvraag.'});
-   if(url.pathname==='/api/session'&&req.method==='GET')return json(res,200,{authenticated:authenticated(req),configured:!!getAccount(),canSetup:isLocal&&allowSetup});
+   if(url.pathname==='/api/session'&&req.method==='GET')return json(res,200,{authenticated:authenticated(req),configured:!!getAccount(),canSetup:isLocal&&allowSetup,publicCollection});
    if(url.pathname==='/api/setup'&&req.method==='POST'){
     if(!isLocal||!allowSetup)return json(res,403,{error:'Eerste installatie kan alleen via het lokale adres van je server.'});
     if(getAccount())return json(res,409,{error:'Er bestaat al een account.'});
@@ -121,8 +157,25 @@ export function createBierServer(options={}) {
     const value=token(req);if(value)db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(value));
     res.setHeader('Set-Cookie',`${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${requestOrigin===publicOrigin?'; Secure':''}`);return json(res,200,{ok:true});
    }
+   if(url.pathname==='/api/public/beers'&&req.method==='GET')return publicCollection?json(res,200,publicBeers.all()):json(res,404,{error:'Niet gevonden.'});
    if(url.pathname.startsWith('/api/')){
     if(!authenticated(req))return json(res,401,{error:'Meld je eerst aan om je collectie te openen.'});
+    if(url.pathname==='/api/shop-prices'){
+     if(req.method==='GET')return json(res,200,latestPrices());
+     if(req.method==='POST'){
+      if(!priceRefresh){
+       if(!allow('price-refresh',1,60000))return json(res,429,{error:'Wacht een minuut voordat je de prijzen opnieuw ververst.'});
+       priceRefresh=fetchShopPrices(activeForPrices.all(),options.shopFetcher).then(commitPriceRefresh).finally(()=>{priceRefresh=null;});
+      }
+      try{return json(res,200,await priceRefresh);}
+      catch{return json(res,502,{error:'Winkelprijzen ophalen is niet gelukt. Je laatste schattingen blijven staan.'});}
+     }
+    }
+    if(url.pathname==='/api/price-history'&&req.method==='GET'){
+     const key=url.searchParams.get('key')||'';
+     if(!key||key.length>1000)return json(res,400,{error:'Kies een bier om de prijsgeschiedenis te bekijken.'});
+     return json(res,200,readHistory.all(key).reverse());
+    }
     const photoMatch=url.pathname.match(/^\/api\/beers\/([0-9a-f-]{36})\/photo$/i);
     if(photoMatch&&req.method==='GET'){
      const photo=getPhoto.get(photoMatch[1])?.photo;
@@ -154,7 +207,7 @@ export function createBierServer(options={}) {
    }
    if(req.method!=='GET'&&req.method!=='HEAD')return json(res,405,{error:'Methode niet toegestaan.'});
    let pathname;try{pathname=decodeURIComponent(url.pathname);}catch{return json(res,400,{error:'Ongeldig adres.'});}
-   const relative=pathname==='/'||pathname==='/login'?'index.html':pathname.replace(/^\/+/, '');
+   const relative=['/','/login','/prijzen'].includes(pathname)?'index.html':pathname.replace(/^\/+/, '');
    const filename=path.resolve(staticDir,relative);
    if(!filename.startsWith(path.resolve(staticDir)+path.sep))return json(res,403,{error:'Geen toegang.'});
    let content;try{if(!statSync(filename).isFile())throw Error();content=readFileSync(filename);}catch{return json(res,404,{error:'Niet gevonden.'});}

@@ -2,16 +2,19 @@ import React,{useEffect,useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Wine,LoaderCircle,ShieldCheck,ArrowRight} from 'lucide-react';
 import Cellar from '../app/cellar';
+import PublicCellar from './public-cellar';
+import PriceHistory from './price-history';
 import '../app/globals.css';
 import './selfhost.css';
-type Session={authenticated:boolean;configured:boolean;canSetup:boolean};
+type Session={authenticated:boolean;configured:boolean;canSetup:boolean;publicCollection:boolean};
 function App(){
  const [session,setSession]=useState<Session|null>(null),[message,setMessage]=useState(''),[busy,setBusy]=useState(false),[username,setUsername]=useState(''),[password,setPassword]=useState(''),[confirm,setConfirm]=useState('');
  async function refresh(){try{const r=await fetch('/api/session',{cache:'no-store'});if(!r.ok)throw Error();setSession(await r.json());}catch{setMessage('De server is niet bereikbaar. Vernieuw de pagina om opnieuw te proberen.');}}
  useEffect(()=>{void refresh();},[]);
  async function signIn(e:React.FormEvent){e.preventDefault();setBusy(true);setMessage('');try{const setup=!session?.configured;if(setup&&password!==confirm)throw Error('De wachtwoorden komen niet overeen.');const r=await fetch(setup?'/api/setup':'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});const body=await r.json() as {error?:string};if(!r.ok)throw Error(body.error||'Aanmelden is niet gelukt.');setPassword('');setConfirm('');await refresh();history.replaceState(null,'','/');}catch(e){setMessage((e as Error).message);}finally{setBusy(false);}}
  async function signOut(){try{const r=await fetch('/api/logout',{method:'POST'});if(!r.ok)throw Error();setSession(prev=>prev?{...prev,authenticated:false}:prev);setPassword('');}catch{setMessage('Afmelden is niet gelukt. Probeer opnieuw.');}}
- if(session?.authenticated)return <><Cellar signedIn local onSignOut={signOut}/>{message&&<div role="alert" className="toast">{message}</div>}</>;
+ if(session?.authenticated)return location.pathname==='/prijzen'?<PriceHistory/>:<><Cellar signedIn local onSignOut={signOut}/>{message&&<div role="alert" className="toast">{message}</div>}</>;
+ if(session?.publicCollection&&location.pathname!=='/login')return <PublicCellar/>;
  return <main className="login-shell"><div className="login-card"><a className="login-brand" href="/"><Wine size={30}/> de bierkelder</a><span className="eyebrow">JOUW COLLECTIE, OP JE EIGEN SERVER</span><h1>{!session?'Je kelder openen…':session.configured?'Welkom terug.':'Maak je bierkelder klaar.'}</h1><p className="login-intro">{session?.configured?'Meld je aan om je bieren te bekijken, een aankoop toe te voegen of je volgende fles te kiezen.':'Stel lokaal je eigen gebruikersnaam en wachtwoord in. Daarna kun je je collectie op deze server bijhouden.'}</p>
  {!session?<LoaderCircle className="spin"/>:!session.configured&&!session.canSetup?<div className="lookup-message">Stel eerst je account in via het lokale adres op je server. De openbare website kan geen eerste account aanmaken.</div>:<form onSubmit={signIn}><label>Gebruikersnaam<input value={username} onChange={e=>setUsername(e.target.value)} autoComplete="username" minLength={3} maxLength={80} required/></label><label>Wachtwoord<input type="password" value={password} onChange={e=>setPassword(e.target.value)} minLength={session.configured?1:12} maxLength={256} autoComplete={session.configured?'current-password':'new-password'} required/></label>{!session.configured&&<><label>Herhaal wachtwoord<input type="password" autoComplete="new-password" value={confirm} onChange={e=>setConfirm(e.target.value)} minLength={12} maxLength={256} required/></label><small>Kies minimaal 12 tekens. Je wachtwoord wordt versleuteld afgeleid opgeslagen.</small></>}<button className="primary" disabled={busy}>{busy?<LoaderCircle size={17} className="spin"/>:<ArrowRight size={17}/>} {busy?'Even geduld…':session.configured?'Mijn kelder openen':'Account instellen'}</button></form>}
  {message&&<p role="alert" className="lookup-message">{message}</p>}<div className="login-footer"><ShieldCheck size={15}/> Privécollectie · opslag op je server</div></div></main>;
