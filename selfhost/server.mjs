@@ -5,8 +5,9 @@ import {promisify} from 'node:util';
 import {mkdirSync,readFileSync,statSync,chmodSync} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {beerSchema,maxPhotoLength} from './schema.mjs';
+import {beerSchema,maxPhotoLength,untappdBeerLink,untappdCatalogSchema,untappdPageSyncSchema,untappdSyncKey} from './schema.mjs';
 import {fetchShopPrices,priceKey} from './shop-prices.mjs';
+import {readWishDetails,wishDetails} from './wish-details.mjs';
 const scrypt=promisify(scryptCallback);
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const COOKIE='bierkelder_session';
@@ -16,11 +17,11 @@ process.umask(0o007);
 const lookupError=(message,status)=>Object.assign(Error(message),{status});
 const httpsLink=value=>typeof value==='string'&&/^https:\/\//.test(value)&&value.length<=1000?value:'';
 const normalizeCode=code=>String(code??'').replace(/^0+/,'');
-export async function lookupBarcode(code,{fetcher=fetch,canFallback=()=>true}={}) {
+export async function lookupBarcode(code,{publicOrigin,fetcher=fetch,canFallback=()=>true}={}) {
  let firstUnavailable=false;
  try {
   const url='https://world.openfoodfacts.org/api/v3/product/'+code+'.json?fields=product_name,product_name_nl,brands,quantity,image_front_url,nutriments';
-  const upstream=await fetcher(url,{headers:{'User-Agent':'DeBierkelder/1.0'},signal:AbortSignal.timeout(5000)});
+  const upstream=await fetcher(url,{headers:{'User-Agent':`DeBierkelder/1.0 (${publicOrigin})`},signal:AbortSignal.timeout(5000)});
   if(upstream.ok){
    const {product:p}=await upstream.json();
    const name=String(p?.product_name_nl||p?.product_name||'').trim().slice(0,160);
@@ -54,11 +55,9 @@ export async function lookupBarcode(code,{fetcher=fetch,canFallback=()=>true}={}
 export function createBierServer(options={}) {
  const dataDir=options.dataDir||process.env.DATA_DIR||'/data';
  const publicOrigin=options.publicOrigin||process.env.PUBLIC_ORIGIN||'';
- const publicHost=publicOrigin?new URL(publicOrigin).host:'';
- if(publicOrigin&&new URL(publicOrigin).protocol!=='https:')throw Error('PUBLIC_ORIGIN moet een HTTPS-adres zijn.');
  const localOrigin=options.localOrigin||process.env.LOCAL_ORIGIN||'http://127.0.0.1:3080';
- const publicCollection=options.publicCollection??process.env.PUBLIC_COLLECTION==='true';
  const allowSetup=options.allowSetup??process.env.ALLOW_SETUP==='true';
+ const publicCollection=options.publicCollection??process.env.PUBLIC_COLLECTION==='true';
  const origins=options.origins||new Set([publicOrigin,localOrigin]);
  const staticDir=options.staticDir||path.join(import.meta.dirname,'public');
  mkdirSync(dataDir,{recursive:true,mode:0o770});
@@ -69,6 +68,8 @@ export function createBierServer(options={}) {
  CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS beers(id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS shop_prices(id INTEGER PRIMARY KEY CHECK(id=1), snapshot TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS untappd_history(id INTEGER PRIMARY KEY CHECK(id=1), snapshot TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS wishlist(id TEXT PRIMARY KEY, name TEXT NOT NULL, brewery TEXT NOT NULL, url TEXT NOT NULL, added_at TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS price_observations(beer_key TEXT NOT NULL, checked_at TEXT NOT NULL,
   amount REAL NOT NULL, source TEXT NOT NULL, url TEXT NOT NULL, PRIMARY KEY(beer_key,checked_at));`);
  const getAccount=()=>db.prepare('SELECT * FROM account WHERE id=1').get();
@@ -86,21 +87,42 @@ export function createBierServer(options={}) {
   'Permissions-Policy':'camera=(self), microphone=(), geolocation=()',
   'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; connect-src 'self'; font-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
  };
- const lookup=options.lookup||(code=>lookupBarcode(code,{canFallback:()=>allow('barcode-fallback',6,60000)}));
+ const lookup=options.lookup||(code=>lookupBarcode(code,{publicOrigin,canFallback:()=>allow('barcode-fallback',6,60000)}));
  const cached=new Map();
  const getPhoto=db.prepare("SELECT json_extract(data,'$.photo') AS photo FROM beers WHERE id=?");
- const publicBeers=db.prepare(`SELECT DISTINCT json_extract(data,'$.name') AS name,
-  coalesce(json_extract(data,'$.brewery'),'') AS brewery,
-  coalesce(json_extract(data,'$.style'),'') AS style,
-  coalesce(json_extract(data,'$.vintage'),'') AS vintage
-  FROM beers WHERE json_extract(data,'$.quantity')>0 ORDER BY name COLLATE NOCASE`);
+ const publicBeers=db.prepare("SELECT json_remove(data,'$.photo') AS data,json_type(data,'$.photo')='text' AS hasPhoto FROM beers WHERE json_extract(data,'$.quantity')>0 ORDER BY updated_at DESC");
+ if(!db.prepare("PRAGMA table_info(wishlist)").all().some(column=>column.name==='wanted_years')){
+  db.exec("ALTER TABLE wishlist ADD COLUMN wanted_years TEXT NOT NULL DEFAULT '[]'");
+ }
+ if(!db.prepare("PRAGMA table_info(wishlist)").all().some(column=>column.name==='details')){
+  db.exec("ALTER TABLE wishlist ADD COLUMN details TEXT");
+ }
+ const wishlist=db.prepare('SELECT id,name,brewery,url,added_at AS addedAt,wanted_years AS years,details FROM wishlist ORDER BY added_at DESC');
+ const wishes=()=>wishlist.all().map(row=>({...row,years:JSON.parse(row.years),details:JSON.parse(row.details)}));
+ const addWish=db.prepare('INSERT OR IGNORE INTO wishlist(id,name,brewery,url,added_at,wanted_years) VALUES(?,?,?,?,?,?)');
+ const updateWish=db.prepare('UPDATE wishlist SET wanted_years=? WHERE id=?');
+ const findWish=db.prepare('SELECT url,details FROM wishlist WHERE id=?');
+ const writeWishDetails=db.prepare('UPDATE wishlist SET details=? WHERE id=?');
+ const removeWish=db.prepare('DELETE FROM wishlist WHERE id=?');
+ function wantedYears(input){
+  if(!Array.isArray(input)||input.length>200||input.some(year=>!Number.isInteger(year)||year<1900||year>2099))return null;
+  return JSON.stringify([...new Set(input)].sort((a,b)=>a-b));
+ }
  const readPrices=db.prepare('SELECT snapshot FROM shop_prices WHERE id=1');
  const savePrices=db.prepare('INSERT INTO shop_prices(id,snapshot) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET snapshot=excluded.snapshot');
+ const getUntappd=db.prepare('SELECT snapshot FROM untappd_history WHERE id=1');
+ const saveUntappd=db.prepare('INSERT INTO untappd_history(id,snapshot) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET snapshot=excluded.snapshot');
+ const readSyncBeer=db.prepare("SELECT json_remove(data,'$.photo') AS data FROM beers WHERE id=?");
+ const writeSyncPage=db.prepare("UPDATE beers SET data=json_set(data,'$.untappdPage',json(?)) WHERE id=?");
+ const chooseUntappdLink=db.prepare("UPDATE beers SET data=json_set(json_remove(data,'$.untappdPage'),'$.untappdUrl',?) WHERE id=?");
  const activeForPrices=db.prepare(`SELECT json_extract(data,'$.name') AS name,json_extract(data,'$.brewery') AS brewery,
   json_extract(data,'$.volume') AS volume,json_extract(data,'$.vintage') AS vintage
   FROM beers WHERE json_extract(data,'$.quantity')>0`);
- const recordPrice=db.prepare('INSERT INTO price_observations(beer_key,checked_at,amount,source,url) VALUES(?,?,?,?,?)');
- const readHistory=db.prepare('SELECT checked_at AS checkedAt,amount,source,url FROM price_observations WHERE beer_key=? ORDER BY checked_at DESC LIMIT 200');
+ if(!db.prepare("PRAGMA table_info(price_observations)").all().some(column=>column.name==='match_kind')){
+  db.exec("ALTER TABLE price_observations ADD COLUMN match_kind TEXT NOT NULL DEFAULT 'exact'");
+ }
+ const recordPrice=db.prepare('INSERT INTO price_observations(beer_key,checked_at,amount,source,url,match_kind) VALUES(?,?,?,?,?,?)');
+ const readHistory=db.prepare('SELECT checked_at AS checkedAt,amount,source,url,match_kind AS matchKind FROM price_observations WHERE beer_key=? ORDER BY checked_at DESC LIMIT 200');
  const latestPrices=()=>JSON.parse(readPrices.get()?.snapshot||'null');
  function commitPriceRefresh(snapshot){
   const found=Object.entries(snapshot.offers);
@@ -113,7 +135,7 @@ export function createBierServer(options={}) {
   }
   db.exec('BEGIN');
   try{
-   for(const [key,offer] of found)recordPrice.run(key,offer.checkedAt,offer.amount,offer.source,offer.url);
+   for(const [key,offer] of found)recordPrice.run(key,offer.checkedAt,offer.amount,offer.source,offer.url,offer.matchKind??'exact');
    savePrices.run(JSON.stringify(snapshot));
    db.exec('COMMIT');
    return snapshot;
@@ -124,8 +146,8 @@ export function createBierServer(options={}) {
   for(const [key,value]of Object.entries(security))res.setHeader(key,value);
   try{
    const host=String(req.headers.host||'');
-   // No auth headers are trusted: the reverse proxy forwards the public Host unchanged.
-   const requestOrigin=publicHost&&host===publicHost?publicOrigin:'http://'+host;
+   // No auth headers are trusted: Cloudflare forwards the public Host unchanged.
+   const requestOrigin=publicOrigin&&host===new URL(publicOrigin).host?publicOrigin:'http://'+host;
    const url=new URL(req.url||'/',requestOrigin);
    if(url.pathname==='/health'&&req.method==='GET')return json(res,200,{ok:true});
    if(!origins.has(requestOrigin))return json(res,421,{error:'Onbekend websiteadres.'});
@@ -134,7 +156,7 @@ export function createBierServer(options={}) {
    if(req.method!=='GET'&&req.method!=='HEAD'&&req.headers.origin!==requestOrigin)return json(res,403,{error:'Ongeldige herkomst van de aanvraag.'});
    if(url.pathname==='/api/session'&&req.method==='GET')return json(res,200,{authenticated:authenticated(req),configured:!!getAccount(),canSetup:isLocal&&allowSetup,publicCollection});
    if(url.pathname==='/api/setup'&&req.method==='POST'){
-    if(!isLocal||!allowSetup)return json(res,403,{error:'Eerste installatie kan alleen via het lokale adres van je server.'});
+    if(!isLocal||!allowSetup)return json(res,403,{error:'Eerste installatie kan alleen via het lokale adres op je NAS.'});
     if(getAccount())return json(res,409,{error:'Er bestaat al een account.'});
     if(!allow('setup',5,15*60*1000))return json(res,429,{error:'Te veel pogingen. Probeer over 15 minuten opnieuw.'});
     const input=await body(req);const username=String(input.username||'').trim();const password=input.password;
@@ -157,9 +179,119 @@ export function createBierServer(options={}) {
     const value=token(req);if(value)db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(value));
     res.setHeader('Set-Cookie',`${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${requestOrigin===publicOrigin?'; Secure':''}`);return json(res,200,{ok:true});
    }
-   if(url.pathname==='/api/public/beers'&&req.method==='GET')return publicCollection?json(res,200,publicBeers.all()):json(res,404,{error:'Niet gevonden.'});
+   if(!publicCollection&&req.method==='GET'&&(/^\/api\/public\/beers(?:\/|$)/.test(url.pathname)||url.pathname==='/api/wishlist')&&!authenticated(req))
+    return json(res,401,{error:'Meld je aan om deze Bierkelder te openen.'});
+   if(url.pathname==='/api/public/beers'&&req.method==='GET')return json(res,200,publicBeers.all().map(row=>{
+    const beer=JSON.parse(row.data);
+    const synced=beer.untappdPage?.key===untappdSyncKey(beer)?beer.untappdPage.data:null;
+    return {id:beer.id,name:beer.name,brewery:beer.brewery||synced?.brewery||'',style:beer.style||synced?.style||'',
+     vintage:beer.vintage,volume:beer.volume,abv:beer.abv??synced?.abv??null,quantity:beer.quantity,
+     image:beer.image,photoPreference:beer.photoPreference,hasPhoto:Boolean(row.hasPhoto),
+     untappdCommunityRating:beer.untappdCommunityRating??synced?.communityRating??null,
+     untappdUrl:beer.untappdUrl||synced?.url||'',untappdDescription:beer.untappdDescription||synced?.description||''};
+   }));
+   if(url.pathname==='/api/wishlist'&&req.method==='GET')return json(res,200,wishes());
+   const publicPhoto=url.pathname.match(/^\/api\/public\/beers\/([0-9a-f-]{36})\/photo$/i);
+   if(publicPhoto&&req.method==='GET'){
+    const row=readSyncBeer.get(publicPhoto[1]);
+    const beer=row&&JSON.parse(row.data);
+    const photo=beer?.quantity>0?getPhoto.get(publicPhoto[1])?.photo:null;
+    if(!photo)return json(res,404,{error:'Geen foto beschikbaar.'});
+    res.writeHead(200,{'Content-Type':'image/jpeg','Cache-Control':'no-store'});
+    return res.end(Buffer.from(photo.slice('data:image/jpeg;base64,'.length),'base64'));
+   }
    if(url.pathname.startsWith('/api/')){
     if(!authenticated(req))return json(res,401,{error:'Meld je eerst aan om je collectie te openen.'});
+    if(url.pathname==='/api/wishlist/details'&&['POST','PUT'].includes(req.method)){
+     const input=await body(req,6000);
+     const row=typeof input?.id==='string'&&input.id.length<=80?findWish.get(input.id):null;
+     if(!row)return json(res,404,{error:'Dit bier staat niet meer op je wishlist.'});
+     let details;
+     if(req.method==='POST'){
+      if(!row.url)return json(res,400,{error:'Dit bier heeft nog geen Untappd-link.'});
+      if(!allow('wishlist-details',40,60000))return json(res,429,{error:'Wacht even en probeer opnieuw.'});
+      try{details=await readWishDetails(row.url,options.wishFetcher);}
+      catch{}
+      if(!details)return json(res,502,{error:'Untappd kon niet worden gelezen. Vul de gegevens handmatig in of probeer later opnieuw.'});
+      const previous=JSON.parse(row.details);
+      if(previous?.image)details.image=previous.image;
+      if(findWish.get(input.id)?.details!==row.details)return json(res,409,{error:'De bierinformatie is intussen gewijzigd.'});
+     }else{
+      details=wishDetails(input.details);
+      if(!details)return json(res,400,{error:'Gebruik een geldige HTTPS-afbeeldingslink.'});
+     }
+     writeWishDetails.run(JSON.stringify(details),input.id);
+     return json(res,200,wishes());
+    }
+    if(url.pathname==='/api/wishlist'&&req.method==='POST'){
+     const input=await body(req,6000);
+     const name=typeof input?.name==='string'?input.name.trim():'';
+     const brewery=typeof input?.brewery==='string'?input.brewery.trim():'';
+     const url=typeof input?.url==='string'?input.url.trim():'';
+     const link=url.startsWith('https://')&&url.length<=1000?untappdBeerLink(url):null;
+     if(!name||name.length>160||brewery.length>160||(url&&!link))return json(res,400,{error:'Vul een biernaam en eventueel een geldige Untappd-link in.'});
+     const id=link?'untappd-'+link.id:hash((brewery+'\n'+name).toLowerCase());
+     const titleYears=[...new Set(name.match(/\b(?:19|20)\d{2}\b/g)??[])];
+     const years=wantedYears(input.years??(link&&titleYears.length===1?titleYears.map(Number):[]));
+     if(!years)return json(res,400,{error:'Gebruik geldige jaartallen tussen 1900 en 2099.'});
+     const added=addWish.run(id,name,brewery,link?.url??'',new Date().toISOString(),years).changes>0;
+     return json(res,200,{added,items:wishes()});
+    }
+    if(url.pathname==='/api/wishlist'&&req.method==='PUT'){
+     const input=await body(req,6000);
+     const years=wantedYears(input?.years);
+     if(typeof input?.id!=='string'||input.id.length>80||!years)return json(res,400,{error:'Gebruik geldige jaartallen tussen 1900 en 2099.'});
+     if(!updateWish.run(years,input.id).changes)return json(res,404,{error:'Dit bier staat niet meer op je wishlist.'});
+     return json(res,200,wishes());
+    }
+    if(url.pathname==='/api/wishlist'&&req.method==='DELETE'){
+     const input=await body(req,2000);
+     if(typeof input?.id!=='string'||input.id.length>80)return json(res,400,{error:'Kies een bier op je wishlist.'});
+     removeWish.run(input.id);
+     return json(res,200,wishes());
+    }
+    if(url.pathname==='/api/untappd/link'&&req.method==='POST'){
+     const input=await body(req,6000);
+     const {id,key,url:chosen}=input??{};
+     const link=typeof chosen==='string'&&chosen.length<=1000&&/^https:\/\//.test(chosen)?untappdBeerLink(chosen):null;
+     if(typeof id!=='string'||id.length!==36||typeof key!=='string'||key.length>1600||!link)
+      return json(res,400,{error:'Kies een geldige Untappd-bierpagina.'});
+     const row=readSyncBeer.get(id);
+     if(!row||untappdSyncKey(JSON.parse(row.data))!==key)
+      return json(res,409,{error:'Dit bier is intussen gewijzigd. Vernieuw de synchronisatie.'});
+     chooseUntappdLink.run(link.url,id);
+     return json(res,200,{ok:true});
+    }
+    if(url.pathname==='/api/untappd/sync'&&req.method==='POST'){
+     const result=untappdPageSyncSchema.safeParse(await body(req,200_000));
+     if(!result.success)return json(res,400,{error:'Ongeldige resultaten uit de Untappd-synchronisatie.'});
+     let saved=0;
+     db.exec('BEGIN');
+     try{
+      for(const {id,key,page} of result.data.results){
+       const row=readSyncBeer.get(id);
+       if(!row)continue;
+       const beer=JSON.parse(row.data);
+       const manualLink=untappdBeerLink(beer.untappdUrl??'');
+       if(untappdSyncKey(beer)!==key||(!manualLink&&beer.untappdAutoMatch===false))continue;
+       if(manualLink&&manualLink.id!==untappdBeerLink(page.url)?.id)continue;
+       if(beer.untappdPage?.key===key&&beer.untappdPage.data.checkedAt>page.checkedAt)continue;
+       writeSyncPage.run(JSON.stringify({key,data:page}),id);saved++;
+      }
+      db.exec('COMMIT');
+     }catch(error){db.exec('ROLLBACK');throw error;}
+     return json(res,200,{saved,skipped:result.data.results.length-saved});
+    }
+    if(url.pathname==='/api/untappd'){
+     if(req.method==='GET')return json(res,200,JSON.parse(getUntappd.get()?.snapshot||'null'));
+     if(req.method==='PUT'){
+      const result=untappdCatalogSchema.safeParse(await body(req,16_000_000));
+      if(!result.success)return json(res,400,{error:'Ongeldige Untappd-geschiedenis.'});
+      const snapshot={importedAt:new Date().toISOString(),entries:result.data};
+      saveUntappd.run(JSON.stringify(snapshot));
+      return json(res,200,snapshot);
+     }
+    }
     if(url.pathname==='/api/shop-prices'){
      if(req.method==='GET')return json(res,200,latestPrices());
      if(req.method==='POST'){
@@ -192,6 +324,10 @@ export function createBierServer(options={}) {
      const result=beerSchema.safeParse(await body(req,20000+maxPhotoLength));if(!result.success)return json(res,400,{error:result.error.issues[0]?.message||'Controleer je gegevens.'});
      const {photo:submittedPhoto,...beer}=result.data;
      delete beer.hasPhoto;
+     const previous=readSyncBeer.get(beer.id);
+     const synced=previous?JSON.parse(previous.data).untappdPage:undefined;
+     delete beer.untappdPage;
+     if(synced?.key===untappdSyncKey(beer))beer.untappdPage=synced;
      beer.updatedAt=new Date().toISOString();
      const photo=submittedPhoto===undefined?getPhoto.get(beer.id)?.photo:submittedPhoto;
      db.prepare('INSERT INTO beers(id,data,updated_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at').run(beer.id,JSON.stringify(photo?{...beer,photo}:beer),beer.updatedAt);
@@ -207,7 +343,7 @@ export function createBierServer(options={}) {
    }
    if(req.method!=='GET'&&req.method!=='HEAD')return json(res,405,{error:'Methode niet toegestaan.'});
    let pathname;try{pathname=decodeURIComponent(url.pathname);}catch{return json(res,400,{error:'Ongeldig adres.'});}
-   const relative=['/','/login','/prijzen'].includes(pathname)?'index.html':pathname.replace(/^\/+/, '');
+   const relative=['/','/login','/prijzen','/untappd','/wishlist'].includes(pathname)?'index.html':pathname.replace(/^\/+/, '');
    const filename=path.resolve(staticDir,relative);
    if(!filename.startsWith(path.resolve(staticDir)+path.sep))return json(res,403,{error:'Geen toegang.'});
    let content;try{if(!statSync(filename).isFile())throw Error();content=readFileSync(filename);}catch{return json(res,404,{error:'Niet gevonden.'});}
