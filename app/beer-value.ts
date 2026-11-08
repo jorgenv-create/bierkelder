@@ -10,7 +10,7 @@ type Price = {
   reference?: boolean;
 };
 type PriceMatch = Price & { brewery: string; name: RegExp; volume: number; vintage?: string };
-export type ShopPrice = {amount: number; url: string; source: string; checkedAt: string};
+export type ShopPrice = {amount: number; url: string; source: string; checkedAt: string; matchKind?:'exact'|'generic'};
 export type ShopPriceSnapshot = {
   checkedAt: string;
   offers?: Record<string, ShopPrice>;
@@ -67,12 +67,12 @@ export function bottleValue(beer: Pick<Beer,'brewery'|'name'|'volume'|'vintage'|
   const offer=snapshot?.offers?.[key];
   const legacyQuote=edition&&snapshot?.quotes?.[edition];
   const match: Price | undefined=offer
-    ? {...offer,checkedOn:offer.checkedAt.slice(0,10)}
+    ? {...offer,checkedOn:offer.checkedAt.slice(0,10),note:offer.matchKind==='generic'?'Winkelprijs zonder vermelde jaargang.':undefined}
     : legacyQuote&&snapshot ? {...legacyQuote,source:'Huis van de Geuze',checkedOn:snapshot.checkedAt.slice(0,10)}
     : snapshot?.keys?.includes(key) ? undefined : prices.find(p=>p.brewery===brewery&&p.volume===beer.volume&&p.name.test(name)
     &&(!p.vintage||p.vintage===beer.vintage.trim()));
 
-  if(match&&!match.reference)return {amount:match.amount,kind:'Winkelprijs',evidence:match};
+  if(match&&!match.reference)return {amount:match.amount,kind:offer?.matchKind==='generic'?'Winkelprijs zonder jaargang':'Winkelprijs',evidence:match};
   if(beer.price!=null)return {amount:beer.price,kind:'Aankoopprijs',evidence:null};
   if(match)return {amount:match.amount,kind:'Winkelreferentie',evidence:match};
   return {amount:null,kind:'Geen waarde bekend',evidence:null};
@@ -92,9 +92,16 @@ export function stockValue(beers: Beer[], snapshot: ShopPriceSnapshot | null = n
   return {amount:known?cents/100:null,unknown};
 }
 
-export function compareBeerStyle(a: Beer,b: Beer) {
+export function compareBeerStyle(a: Pick<Beer,'name'|'style'>,b: Pick<Beer,'name'|'style'>) {
   const aStyle=a.style.trim();
   const bStyle=b.style.trim();
   if(Boolean(aStyle)!==Boolean(bStyle))return aStyle?-1:1;
   return aStyle.localeCompare(bStyle,'nl-BE',{sensitivity:'base'})||a.name.localeCompare(b.name,'nl-BE');
+}
+
+export function compareBeerAge(a:Pick<Beer,'name'|'vintage'>,b:Pick<Beer,'name'|'vintage'>,newest=false){
+ const year=(beer:Pick<Beer,'name'|'vintage'>)=>Number(beer.vintage.match(/\b(?:19|20)\d{2}\b/)?.[0]??beer.name.match(/\b(?:19|20)\d{2}\b/)?.[0])||0;
+ const left=year(a),right=year(b);
+ if(!left||!right)return Number(!left)-Number(!right)||a.name.localeCompare(b.name,'nl-BE');
+ return (newest?right-left:left-right)||a.name.localeCompare(b.name,'nl-BE');
 }

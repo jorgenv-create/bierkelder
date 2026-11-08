@@ -1,6 +1,9 @@
 services:
   bierkelder:
-    build: .
+    build:
+      context: .
+      args:
+        BIERKELDER_EXTENSION_ORIGIN: "${PUBLIC_ORIGIN:-http://127.0.0.1:3080}"
     image: bierkelder:local
     restart: unless-stopped
     ports:

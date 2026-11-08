@@ -1,6 +1,6 @@
 {
   "name": "de-bierkelder",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "node selfhost/build.mjs",
-    "test": "node --test selfhost/server.test.mjs",
+    "test": "node --test selfhost/server.test.mjs selfhost/untappd-extension.test.mjs",
     "start": "node dist-selfhost/server.mjs"
   },
   "dependencies": {
@@ -20,6 +20,7 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
-    "esbuild": "0.28.0"
+    "esbuild": "0.28.0",
+    "fflate": "0.7.4"
   }
 }

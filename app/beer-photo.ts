@@ -3,9 +3,14 @@ import { maxPhotoLength, type Beer } from './beer';
 export const beerPhotoUrl = (beer: Pick<Beer, 'id' | 'updatedAt'>) =>
   `/api/beers/${encodeURIComponent(beer.id)}/photo?v=${encodeURIComponent(beer.updatedAt)}`;
 
-export function beerImage(beer: Beer) {
-  if (beer.photo === null) return beer.image;
-  return beer.photo || (beer.hasPhoto ? beerPhotoUrl(beer) : beer.image);
+export function ownBeerPhoto(beer: Beer,guest=false) {
+  if (beer.photo === null) return '';
+  return beer.photo || (beer.hasPhoto ? (guest?beerPhotoUrl(beer).replace('/api/beers/','/api/public/beers/'):beerPhotoUrl(beer)) : '');
+}
+
+export function beerImages(beer: Beer,guest=false) {
+  const own = ownBeerPhoto(beer,guest);
+  return (beer.photoPreference === 'own' ? [own, beer.image] : [beer.image, own]).filter(Boolean);
 }
 
 export function photoDataUrl(blob: Blob): Promise<string> {

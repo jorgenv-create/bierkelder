@@ -30,13 +30,21 @@ De database, foto's en het account staan in het Docker-volume `bierkelder-data`.
 
 ## Winkelprijzen en prijsgeschiedenis
 
-Met **Winkelprijzen verversen** vergelijk je je volledige voorraad met de openbare productcatalogi van Huis van de Geuze en Geuzeshop. De app zoekt per brouwerij, bier, flesinhoud en jaargang. Alleen een leverbare match met een europrijs telt als winkelprijs. Zonder match telt de aankoopprijs mee als die ingevuld is. Klik op een winkelprijs om de productpagina te openen.
+**Winkelprijzen verversen** zoekt bij Huis van de Geuze en Geuzeshop. Voor Liefmans Goudenband worden ook Belgian Beer Heaven en Belgian Beer Factory geraadpleegd. Een exacte jaargang krijgt voorrang op een winkelprijs zonder jaartal. De grafiek op de bierkaart en de aparte prijspagina tonen het verloop.
 
-In **Prijsgeschiedenis** zie je per fles de laagste gevonden winkelprijs per controle, met datum en bron. De eerste controle begint de geschiedenis. De metingen staan in SQLite en vallen onder een back-up van het volledige volume. Via **Zoek deze fles op het web** kun je ook buiten de gekoppelde catalogi zoeken.
+## Openbare collectie en wishlist
 
-## Openbare collectie
+Met PUBLIC_COLLECTION=true in .env kunnen gasten de collectiekaarten, foto's, groepen, jaargangen, algemene scores en wishlist bekijken. Aankoopgegevens, notities, persoonlijke scores en prijzen blijven privé. Deze optie staat standaard uit.
 
-Met `PUBLIC_COLLECTION=true` in `.env` kun je bezoekers op je startpagina je biernamen, brouwerijen, stijlen en jaargangen laten zien. Aankoopgegevens, aantallen, foto's, notities en prijsgeschiedenis zijn afgeschermd. Je beheert de kelder na inloggen. De openbare collectie staat standaard uit.
+Via **Wishlist** bewaar je bieren en gezochte jaargangen. Open een wens om bierinfo op te halen of de afbeelding en gewenste jaren aan te passen.
+
+## Untappd-extensie
+
+Download de zip op de pagina **Untappd** in je Bierkelder. Pak hem uit en kies in Chrome of Edge onder **Extensies → Ontwikkelaarsmodus** voor **Uitgepakte extensie laden**. Kies de map met manifest.json. De extensie leest bierpagina's vanuit je eigen browsersessie en voegt op Untappd een knop toe voor je wishlist.
+
+Stel PUBLIC_ORIGIN in vóór de Docker-build. De extensie wordt gekoppeld aan dat adres, of standaard aan http://127.0.0.1:3080. Bij een ander adres bouw je de container opnieuw en laad je de nieuwe extensie. Voor een build zonder Docker gebruik je BIERKELDER_EXTENSION_ORIGIN.
+
+Bekijk [CHANGELOG.md](CHANGELOG.md) voor de wijzigingen per versie.
 
 ## Ontwikkelen
 
