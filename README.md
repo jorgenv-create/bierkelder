@@ -28,6 +28,16 @@ De barcodescanner gebruikt de camera op je toestel en vereist HTTPS of een loopb
 
 De database, foto's en het account staan in het Docker-volume `bierkelder-data`. Een normale herbouw laat dit volume intact. Download via de app een JSON-back-up van je collectie en foto's. Voor een back-up inclusief account stop je de container en maak je een back-up van het volledige volume. `docker compose down -v` verwijdert de database.
 
+## Winkelprijzen en prijsgeschiedenis
+
+Met **Winkelprijzen verversen** vergelijk je je volledige voorraad met de openbare productcatalogi van Huis van de Geuze en Geuzeshop. De app zoekt per brouwerij, bier, flesinhoud en jaargang. Alleen een leverbare match met een europrijs telt als winkelprijs. Zonder match telt de aankoopprijs mee als die ingevuld is. Klik op een winkelprijs om de productpagina te openen.
+
+In **Prijsgeschiedenis** zie je per fles de laagste gevonden winkelprijs per controle, met datum en bron. De eerste controle begint de geschiedenis. De metingen staan in SQLite en vallen onder een back-up van het volledige volume. Via **Zoek deze fles op het web** kun je ook buiten de gekoppelde catalogi zoeken.
+
+## Openbare collectie
+
+Met `PUBLIC_COLLECTION=true` in `.env` kun je bezoekers op je startpagina je biernamen, brouwerijen, stijlen en jaargangen laten zien. Aankoopgegevens, aantallen, foto's, notities en prijsgeschiedenis zijn afgeschermd. Je beheert de kelder na inloggen. De openbare collectie staat standaard uit.
+
 ## Ontwikkelen
 
 Gebruik Node.js 24 en voer het volgende uit.

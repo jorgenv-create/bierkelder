@@ -9,6 +9,7 @@ services:
       LOCAL_ORIGIN: "http://127.0.0.1:3080"
       PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:-}"
       ALLOW_SETUP: "${ALLOW_SETUP:-false}"
+      PUBLIC_COLLECTION: "${PUBLIC_COLLECTION:-false}"
     volumes:
       - bierkelder-data:/data
     read_only: true
