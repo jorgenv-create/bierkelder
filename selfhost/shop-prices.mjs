@@ -63,22 +63,23 @@ function productOffer(product,shop){
  return key?{key,amount:Number(price.price)/100,url:url.origin+url.pathname,source:shop.name}:null;
 }
 
-async function readCatalog(shop,fetcher){
+async function searchCatalog(shop,query,fetcher,signal){
  const offers=[];
- const signal=AbortSignal.timeout(18000);
+ const pageSize=25;
  const readPage=async page=>{
   const fields='name,type,permalink,prices,attributes,is_in_stock,is_purchasable,is_on_backorder';
-  const response=await fetcher(`${shop.origin}/wp-json/wc/store/v1/products?per_page=100&page=${page}&_fields=${fields}`,{
+  const response=await fetcher(`${shop.origin}/wp-json/wc/store/v1/products?per_page=${pageSize}&page=${page}&_fields=${fields}&search=${encodeURIComponent(query)}`,{
    headers:{Accept:'application/json'},redirect:'error',signal,
   });
   if(!response.ok)throw Error('Catalogus onbereikbaar');
   const products=await response.json();
-  if(!Array.isArray(products)||products.length>100)throw Error('Onverwachte catalogus');
-  return {products,totalPages:Number(response.headers.get('X-WP-TotalPages')??1)};
+  if(!Array.isArray(products)||products.length>pageSize)throw Error('Onverwachte catalogus');
+  const totalPages=response.headers.get('X-WP-TotalPages');
+  if(totalPages===null&&products.length===pageSize)throw Error('Onvolledige zoekresultaten');
+  return {products,totalPages:Number(totalPages??1)};
  };
  const first=await readPage(1);
- if(!Number.isSafeInteger(first.totalPages)||first.totalPages<0||first.totalPages>25||
-   (first.totalPages===1&&first.products.length===100))throw Error('Onvolledige catalogus');
+ if(!Number.isSafeInteger(first.totalPages)||first.totalPages<0||first.totalPages>25)throw Error('Onvolledige zoekresultaten');
  const collect=products=>{for(const product of products){const offer=productOffer(product,shop);if(offer)offers.push(offer);}};
  collect(first.products);
  for(let page=2;page<=first.totalPages;page+=3){
@@ -91,15 +92,30 @@ async function readCatalog(shop,fetcher){
 export async function fetchShopPrices(beers,fetcher=fetch){
  const checkedAt=new Date().toISOString();
  const keys=new Set(beers.map(priceKey).filter(Boolean));
- const results=await Promise.allSettled(shops.map(shop=>readCatalog(shop,fetcher)));
- const sources=shops.map((shop,index)=>({name:shop.name,available:results[index].status==='fulfilled'}));
- if(!sources.some(source=>source.available))throw Error('De winkelcatalogi zijn niet bereikbaar');
+ const queries=new Set([...keys].map(key=>{
+  const [brewery,title]=JSON.parse(key);
+  return brewery==='boon'&&/^black label \d+$/.test(title)?'black label':`${brewery} ${title}`;
+ }));
+ const signal=AbortSignal.timeout(20000);
+ const sources=shops.map(shop=>({name:shop.name,available:true}));
+ const searches=shops.flatMap((shop,index)=>[...queries].map(query=>({shop,query,source:sources[index]})));
  const offers={};
- for(const result of results){
-  if(result.status!=='fulfilled')continue;
-  for(const {key,...offer} of result.value){
-   if(keys.has(key)&&(!offers[key]||offer.amount<offers[key].amount))offers[key]={...offer,checkedAt};
+ let successful=0;
+ for(let index=0;index<searches.length;index+=4){
+  await Promise.all(searches.slice(index,index+4).map(async({shop,query,source})=>{
+   try{
+    const results=await searchCatalog(shop,query,fetcher,signal);
+    successful++;
+    for(const {key,...offer} of results){
+     if(keys.has(key)&&(!offers[key]||offer.amount<offers[key].amount))offers[key]={...offer,checkedAt};
+    }
+   }catch{source.available=false;}
+  }));
+  if(signal.aborted){
+   for(const {source} of searches.slice(index+4))source.available=false;
+   break;
   }
  }
+ if(searches.length&&!successful)throw Error('De winkelcatalogi zijn niet bereikbaar');
  return {checkedAt,sources,offers,keys:[...keys],scanned:beers.length};
 }

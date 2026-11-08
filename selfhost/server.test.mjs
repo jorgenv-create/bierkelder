@@ -57,6 +57,7 @@ test('winkelprijzen vergelijken beide webshops en houden inhoud en jaargang uit 
  const secondUrl='https://geuzeshop.com/shop/boon-4/';
  const snapshot=await fetchShopPrices([pricedBeer,newer,geuze,otherYear,{...pricedBeer,volume:375}],async input=>{
   const url=new URL(input);
+  assert.ok(['black label','boon oude geuze'].includes(url.searchParams.get('search')));
   if(url.hostname==='geuzeshop.com')return Response.json([{...shopProduct,permalink:secondUrl,prices:{...shopProduct.prices,price:'2200'}}]);
   assert.equal(url.hostname,'www.huisvandegeuze.be');
   return Response.json([shopProduct,{...shopProduct,name:'Boon Oude Geuze 75cl (2024)',permalink:'https://www.huisvandegeuze.be/winkel/boon-2024/'},
