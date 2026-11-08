@@ -1,0 +1,25 @@
+{
+  "name": "de-bierkelder",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "node selfhost/build.mjs",
+    "test": "node --test selfhost/server.test.mjs",
+    "start": "node dist-selfhost/server.mjs"
+  },
+  "dependencies": {
+    "@zxing/browser": "0.1.5",
+    "lucide-react": "1.31.0",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.0"
+  }
+}

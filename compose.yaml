@@ -1,0 +1,22 @@
+services:
+  bierkelder:
+    build: .
+    image: bierkelder:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3080:3000"
+    environment:
+      LOCAL_ORIGIN: "http://127.0.0.1:3080"
+      PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:-}"
+      ALLOW_SETUP: "${ALLOW_SETUP:-false}"
+    volumes:
+      - bierkelder-data:/data
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+
+volumes:
+  bierkelder-data:
