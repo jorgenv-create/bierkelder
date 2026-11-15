@@ -299,15 +299,13 @@ test('selfhost: lokale setup, sessies, autorisatie, opslag en herstart',async()=
 
  test('verse installatie zonder PUBLIC_ORIGIN blijft bereikbaar en privé',async()=>{
  const dir=mkdtempSync(path.join(tmpdir(),'bierkelder-local-'));
- const origins=new Set();
- const server=createBierServer({dataDir:dir,publicOrigin:'',localOrigin:'http://127.0.0.1:3080',origins});
+ const server=createBierServer({dataDir:dir});
  try{
   server.listen(0,'127.0.0.1');await once(server,'listening');
   const base='http://127.0.0.1:'+server.address().port;
   assert.equal((await fetch(base+'/health')).status,200);
-  origins.add(base);
-  const session=await fetch(base+'/api/session');
-  assert.equal(session.status,200);const data=await session.json();
+  const session=await new Promise((resolve,reject)=>http.get(base+'/api/session',{headers:{Host:'127.0.0.1:3080'}},res=>{let body='';res.on('data',chunk=>body+=chunk);res.on('end',()=>resolve({status:res.statusCode,body}));}).on('error',reject));
+  assert.equal(session.status,200);const data=JSON.parse(session.body);
   assert.equal(data.configured,false);assert.equal(data.publicCollection,false);
  }finally{await new Promise(resolve=>server.close(resolve));rmSync(dir,{recursive:true,force:true});}
 });

@@ -55,7 +55,7 @@ export async function lookupBarcode(code,{publicOrigin,fetcher=fetch,canFallback
 export function createBierServer(options={}) {
  const dataDir=options.dataDir||process.env.DATA_DIR||'/data';
  const publicOrigin=options.publicOrigin||process.env.PUBLIC_ORIGIN||'';
- const localOrigin=options.localOrigin||process.env.LOCAL_ORIGIN||'http://192.168.1.99:3080';
+ const localOrigin=options.localOrigin||process.env.LOCAL_ORIGIN||'http://127.0.0.1:3080';
  const allowSetup=options.allowSetup??process.env.ALLOW_SETUP==='true';
  const publicCollection=options.publicCollection??process.env.PUBLIC_COLLECTION==='true';
  const origins=options.origins||new Set([publicOrigin,localOrigin]);
