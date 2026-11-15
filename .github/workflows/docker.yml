@@ -1,42 +1,54 @@
-name: Docker
+name: Test and publish Docker image
 
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
-jobs:
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Build and test
-        run: docker build --tag bierkelder:ci .
-      - name: Start a fresh container
-        run: |
-          docker run -d --name bierkelder-ci -p 127.0.0.1:3080:3000 -v bierkelder-ci:/data bierkelder:ci
-          curl --fail --retry 10 --retry-all-errors --retry-delay 1 http://127.0.0.1:3080/health || { docker logs bierkelder-ci; exit 1; }
-          curl --fail http://127.0.0.1:3080/api/session | grep -F '"configured":false'
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
 
+jobs:
   publish:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    needs: validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/jorgenv-create/bierkelder
     steps:
       - uses: actions/checkout@v6
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+      - uses: actions/setup-node@v6
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Publish Linux images
-        env:
-          IMAGE: docker.io/${{ vars.DOCKERHUB_USERNAME }}/bierkelder
+          node-version: '24'
+      - name: Build and test Docker image
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          docker buildx build --platform linux/amd64,linux/arm64 --tag "$IMAGE:$VERSION" --tag "$IMAGE:latest" --push .
+          docker build --build-arg BIERKELDER_EXTENSION_ORIGIN=https://bier.jorgenv.be \
+            --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
+            --label org.opencontainers.image.revision=${{ github.sha }} \
+            -t "$IMAGE:latest" -t "$IMAGE:$VERSION" -t "$IMAGE:sha-${{ github.sha }}" .
+      - name: Verify container starts
+        run: |
+          docker run -d --name bierkelder-ci -p 127.0.0.1:3080:3000 -v bierkelder-ci:/data "$IMAGE:latest"
+          curl --fail --retry 10 --retry-all-errors --retry-delay 1 http://127.0.0.1:3080/health || { docker logs bierkelder-ci; exit 1; }
+          curl --fail http://127.0.0.1:3080/api/session | grep -F '"configured":false'
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish tested image
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          docker push "$IMAGE:sha-${{ github.sha }}"
+          docker push "$IMAGE:$VERSION"
+          docker push "$IMAGE:latest"
