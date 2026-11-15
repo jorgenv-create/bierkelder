@@ -13,7 +13,7 @@ ALLOW_SETUP=true
 Start de app.
 
 ```sh
-docker compose up -d --build
+docker compose up -d
 ```
 
 Open [http://127.0.0.1:3080](http://127.0.0.1:3080) op de computer waarop Docker draait en maak je eigen account. Zet daarna `ALLOW_SETUP=false` in `.env` en voer `docker compose up -d` opnieuw uit. De app gebruikt één account per installatie.
@@ -58,9 +58,9 @@ npm test
 
 Start desgewenst daarna `npm start` met `DATA_DIR` op een schrijfbare map, `PORT=3080`, `LOCAL_ORIGIN=http://127.0.0.1:3080` en tijdens de eerste installatie `ALLOW_SETUP=true`.
 
-## Docker Hub publiceren
+## Updates via GitHub
 
-Maak een publieke `bierkelder`-repository onder je eigen Docker Hub-account. Stel in GitHub Actions de repositoryvariabele `DOCKERHUB_USERNAME` en het geheim `DOCKERHUB_TOKEN` in. Gebruik voor het geheim een Docker Hub-token met lees- en schrijfrechten. Start daarna de workflow **Docker** handmatig vanaf `main`. Die test de image en publiceert de versie uit `package.json` en de tag `latest` voor Linux op AMD64 en ARM64.
+Elke push naar main bouwt en test de Docker-image. Geslaagde builds worden gepubliceerd naar `ghcr.io/jorgenv-create/bierkelder:latest`, met een versietag en commit-tag. Zie [UPDATES.md](UPDATES.md) voor de eenmalige Unraid-koppeling en volgende updates.
 
 ## Licentie
 
