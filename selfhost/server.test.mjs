@@ -296,3 +296,18 @@ test('selfhost: lokale setup, sessies, autorisatie, opslag en herstart',async()=
   assert.equal((await request('/api/beers',{extraHeaders:{'oai-authenticated-user-id':'fake'}})).status,401,'oude hostingheaders geven geen toegang');
  }finally{if(running)await stop();const prefix=path.resolve(tmpdir())+path.sep+'bierkelder-test-';if(path.resolve(dataDir).startsWith(prefix))rmSync(dataDir,{recursive:true,force:true});}
 });
+
+ test('verse installatie zonder PUBLIC_ORIGIN blijft bereikbaar en privé',async()=>{
+ const dir=mkdtempSync(path.join(tmpdir(),'bierkelder-local-'));
+ const origins=new Set();
+ const server=createBierServer({dataDir:dir,publicOrigin:'',localOrigin:'http://127.0.0.1:3080',origins});
+ try{
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  const base='http://127.0.0.1:'+server.address().port;
+  assert.equal((await fetch(base+'/health')).status,200);
+  origins.add(base);
+  const session=await fetch(base+'/api/session');
+  assert.equal(session.status,200);const data=await session.json();
+  assert.equal(data.configured,false);assert.equal(data.publicCollection,false);
+ }finally{await new Promise(resolve=>server.close(resolve));rmSync(dir,{recursive:true,force:true});}
+});

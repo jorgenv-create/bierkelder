@@ -151,7 +151,7 @@ export function createBierServer(options={}) {
   try{
    const host=String(req.headers.host||'');
    // No auth headers are trusted: Cloudflare forwards the public Host unchanged.
-   const requestOrigin=host===new URL(publicOrigin).host?publicOrigin:'http://'+host;
+   const requestOrigin=publicOrigin&&host===new URL(publicOrigin).host?publicOrigin:'http://'+host;
    const url=new URL(req.url||'/',requestOrigin);
    if(url.pathname==='/health'&&req.method==='GET')return json(res,200,{ok:true});
    if(!origins.has(requestOrigin))return json(res,421,{error:'Onbekend websiteadres.'});
