@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0 — 2026-11-15
+
+- Wishlist-bier als nieuwe aankoop toevoegen via het ingevulde collectieformulier.
+- Bestaande wishlistcategorieën, webshopprijzen en mobiele weergave ook opgenomen in GitHub.
+- Geteste Docker-images automatisch publiceren naar GitHub Container Registry; Unraid bijwerken via Check for Updates.
+
 ## 1.1.0 · 8 november 2026
 
 ### Collectie
