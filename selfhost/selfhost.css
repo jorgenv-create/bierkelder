@@ -38,8 +38,23 @@
 .price-chart text { fill:#415043; font:12px Arial,sans-serif; }
 .price-table-scroll { overflow-x:auto; }
 .beer-price-history { margin:16px 0; }
-.wishlist-form { margin-bottom:18px; }
+.wishlist-add { margin-bottom:18px; }
+.wishlist-add .wishlist-disclosure { width:fit-content; font-size:.9rem; font-family:inherit; }
+.wishlist-form { margin-top:8px; }
 .wishlist-form button { margin:12px 0 6px; }
+.wishlist-form label { display:grid; gap:5px; min-width:0; }
+.wishlist-form input { width:100%; min-width:0; }
+@media (max-width:560px) {
+ .wishlist-form .form-grid { grid-template-columns:minmax(0,1fr); }
+}
+.wishlist-groups { display:grid; gap:10px; }
+.wishlist-disclosure { display:flex; align-items:center; gap:10px; min-height:48px; padding:10px 14px; list-style:none; cursor:pointer; border:1px solid var(--line); border-radius:7px; background:#fdfcf9; font:600 1.15rem/1.35 Georgia,serif; }
+.wishlist-disclosure::-webkit-details-marker { display:none; }
+.wishlist-disclosure:hover { background:#eef2e7; }
+.wishlist-disclosure:focus-visible { outline:3px solid #ad8b4b; outline-offset:2px; }
+.wishlist-disclosure small { display:inline-block; margin-left:5px; color:#536252; font:600 .8rem/1.4 system-ui,sans-serif; }
+.wishlist-disclosure > svg:last-child { margin-left:auto; flex-shrink:0; }
+details[open] > .wishlist-disclosure > svg:last-child { transform:rotate(180deg); }
 .wishlist-list { list-style:none; padding:0; display:grid; gap:8px; }
 .wishlist-list li { display:flex; justify-content:space-between; align-items:start; }
 .wishlist-list .wishlist-card { display:block; }
@@ -54,3 +69,11 @@
 .wishlist-years,.wishlist-year-section { margin-top:12px; }
 .wishlist-year-section h4 { margin:14px 0 0; }
 .wishlist-year-editor { margin-top:16px; }
+.wishlist-card-open .wishlist-card-price { color:#285741; font-weight:600; }
+.wishlist-offers { list-style:none; display:grid; gap:6px; padding:0; }
+.wishlist-offers li { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:3px 12px; padding:8px 0; border-bottom:1px solid #dce3d9; }
+.wishlist-offers li a { overflow-wrap:anywhere; }
+.wishlist-offers li a svg { display:inline; vertical-align:middle; }
+.wishlist-offers li small { grid-row:2; color:#536252; }
+.wishlist-offers li strong { grid-column:2; grid-row:1 / span 2; align-self:center; white-space:nowrap; }
+.wishlist-price-note { font-size:.82rem; color:#536252; }

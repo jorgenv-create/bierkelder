@@ -8,7 +8,7 @@ import http from 'node:http';
 import {randomBytes} from 'node:crypto';
 import {once} from 'node:events';
 import {createBierServer,lookupBarcode} from '../dist-selfhost/server.mjs';
-import {fetchShopPrices,priceKey} from '../dist-selfhost/shop-prices.mjs';
+import {fetchShopPrices,fetchWishOffers,priceKey} from '../dist-selfhost/shop-prices.mjs';
 import {matchUntappd,parseUntappdExport,untappdSyncKey} from '../app/untappd.ts';
 import {emptyBeer,beerSchema} from '../dist-selfhost/schema.mjs';
 import {drinkStart,suggestDrinkWindow} from '../app/drink-window.ts';
@@ -61,6 +61,21 @@ test('Black Label gebruikt de winkelprijs voor de juiste editie en flesinhoud',(
 });
 const shopProduct={name:'Boon Oude Geuze Black Label Edition N°4 &#8211; 75 cl',type:'simple',permalink:'https://www.huisvandegeuze.be/winkel/boon-4/',is_in_stock:true,is_purchasable:true,attributes:[{name:'Merken',terms:[{name:'Boon'}]}],prices:{price:'2450',currency_code:'EUR',currency_minor_unit:2}};
 const pricedBeer={...emptyBeer(),name:'Oude Geuze Boon Black Label #4',brewery:'Brouwerij Boon',vintage:'2017'};
+test('wishlist houdt winkelprijzen per winkel, flesinhoud en passende jaargang apart',async()=>{
+ const product=(name,path,price,extra={})=>({...shopProduct,name,permalink:'https://www.huisvandegeuze.be/winkel/'+path+'/',prices:{...shopProduct.prices,price},...extra});
+ const snapshot=await fetchWishOffers({name:'Oude Geuze Boon',brewery:'Boon',years:[2022]},async url=>{
+  if(new URL(url).hostname==='geuzeshop.com')return Response.json([product('Oude Geuze Boon 2022 75 cl','', '1400',{permalink:'https://geuzeshop.com/shop/boon-2022/'})]);
+  return Response.json([
+   product('Oude Geuze Boon 2022 75 cl','boon-2022','1200'),
+   product('Oude Geuze Boon 2022 75 cl','boon-2022-duur','1600'),
+   product('Oude Geuze Boon 37,5 cl','boon-375','500'),
+   product('Oude Geuze Boon 2021 75 cl','boon-2021','1200'),
+   product('Oude Geuze Boon 2022 75 cl','niet-op-voorraad','100',{is_in_stock:false}),
+  ]);
+ });
+ assert.equal(snapshot.partial,false);
+ assert.deepEqual(snapshot.offers.map(({amount,volume,year})=>[amount,volume,year]),[[5,375,null],[12,750,2022],[14,750,2022]]);
+});
 const untappdCsv=`beer_name,brewery_name,beer_type,beer_abv,beer_ibu,rating_score,created_at,beer_url,checkin_id,comment
 "Boon Oude Geuze Black Label Edition N°4",Boon,Geuze,7,0,4.25,2026-10-02 18:30:00,/b/boon-black-label-4/101,10,"proefnotitie,
 met nieuwe regel"
@@ -141,7 +156,7 @@ test('barcode zoekt eerst bij Open Food Facts en gebruikt alleen een exacte twee
 });
 test('selfhost: lokale setup, sessies, autorisatie, opslag en herstart',async()=>{
  const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(r=>socket.close(r));
- const origin='http://127.0.0.1:'+port,publicOrigin='https://bier.example.com';
+ const origin='http://127.0.0.1:'+port,publicOrigin='https://bier.jorgenv.be';
  const dataDir=mkdtempSync(path.join(tmpdir(),'bierkelder-test-'));let lookups=0;
  let shopAvailable=true;
  const config={dataDir,localOrigin:origin,publicOrigin,allowSetup:true,publicCollection:true,lookup:async code=>{lookups++;return {name:'Testbier',barcode:code};},
@@ -160,7 +175,7 @@ test('selfhost: lokale setup, sessies, autorisatie, opslag en herstart',async()=
   assert.equal((await request('/api/shop-prices',{method:'POST'})).status,401);
   assert.equal((await request('/api/session')).status,200);
   const password=randomBytes(24).toString('base64url'),credentials={username:'jorgen',password};
-  assert.equal((await request('/api/setup',{method:'POST',data:credentials,originHeader:publicOrigin,host:'bier.example.com'})).status,403,'setup via openbaar adres moet geweigerd worden');
+  assert.equal((await request('/api/setup',{method:'POST',data:credentials,originHeader:publicOrigin,host:'bier.jorgenv.be'})).status,403,'setup via openbaar adres moet geweigerd worden');
   assert.equal((await request('/api/setup',{method:'POST',data:credentials,originHeader:'https://evil.example'})).status,403);
   assert.equal((await request('/api/setup',{method:'POST',data:{...credentials,password:'kort'}})).status,400);
   const setup=await request('/api/setup',{method:'POST',data:credentials});assert.equal(setup.status,201);
@@ -170,7 +185,7 @@ test('selfhost: lokale setup, sessies, autorisatie, opslag en herstart',async()=
   assert.equal((await request('/api/untappd',{method:'PUT',data:entries,cookie})).status,200);
   assert.equal((await request('/api/setup',{method:'POST',data:credentials})).status,409);
   assert.equal((await request('/api/login',{method:'POST',data:{...credentials,password:'onjuist'}})).status,401);
-  const publicLogin=await request('/api/login',{method:'POST',data:credentials,host:'bier.example.com',originHeader:publicOrigin});assert.equal(publicLogin.status,200);assert.match(publicLogin.headers.get('set-cookie'),/; Secure/);
+  const publicLogin=await request('/api/login',{method:'POST',data:credentials,host:'bier.jorgenv.be',originHeader:publicOrigin});assert.equal(publicLogin.status,200);assert.match(publicLogin.headers.get('set-cookie'),/; Secure/);
   const beer={...emptyBeer(),name:'Testaankoop',quantity:3,purchasedQuantity:3,price:4,purchaseDate:'2026-11-06',drinkDate:'2028-07-01'};
   const window={drinkFromYear:2029,drinkUntilYear:2035};
   const untappdUrl='https://untappd.com/b/brouwerij-boon-oude-geuze-boon-black-label/1254816';
@@ -193,6 +208,9 @@ test('selfhost: lokale setup, sessies, autorisatie, opslag en herstart',async()=
   assert.equal((await (await request('/api/wishlist')).json())[0].name,wish.name);
   const wishId=(await (await request('/api/wishlist')).json())[0].id;
   assert.equal((await request('/api/wishlist/details',{method:'POST',data:{id:wishId}})).status,401);
+   assert.equal((await request('/api/wishlist/shop-prices',{method:'POST',data:{id:wishId}})).status,401);
+   assert.equal((await request('/api/wishlist/shop-prices',{method:'POST',data:{id:wishId},cookie})).status,200);
+   assert.deepEqual((await (await request('/api/wishlist')).json())[0].shopPrices.offers,[]);
   const updatedWish=await (await request('/api/wishlist/details',{method:'POST',data:{id:wishId},cookie})).json();
   assert.equal(updatedWish[0].details.rating,4.12);
   assert.equal(updatedWish[0].details.abv,7);

@@ -6,7 +6,7 @@ import {mkdirSync,readFileSync,statSync,chmodSync} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {beerSchema,maxPhotoLength,untappdBeerLink,untappdCatalogSchema,untappdPageSyncSchema,untappdSyncKey} from './schema.mjs';
-import {fetchShopPrices,priceKey} from './shop-prices.mjs';
+import {fetchShopPrices,fetchWishOffers,priceKey} from './shop-prices.mjs';
 import {readWishDetails,wishDetails} from './wish-details.mjs';
 const scrypt=promisify(scryptCallback);
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -54,10 +54,10 @@ export async function lookupBarcode(code,{publicOrigin,fetcher=fetch,canFallback
 
 export function createBierServer(options={}) {
  const dataDir=options.dataDir||process.env.DATA_DIR||'/data';
- const publicOrigin=options.publicOrigin||process.env.PUBLIC_ORIGIN||'';
- const localOrigin=options.localOrigin||process.env.LOCAL_ORIGIN||'http://127.0.0.1:3080';
+ const publicOrigin=options.publicOrigin||process.env.PUBLIC_ORIGIN||'https://bier.jorgenv.be';
+ const localOrigin=options.localOrigin||process.env.LOCAL_ORIGIN||'http://192.168.1.99:3080';
  const allowSetup=options.allowSetup??process.env.ALLOW_SETUP==='true';
- const publicCollection=options.publicCollection??process.env.PUBLIC_COLLECTION==='true';
+ const publicCollection=options.publicCollection??process.env.PUBLIC_COLLECTION!=='false';
  const origins=options.origins||new Set([publicOrigin,localOrigin]);
  const staticDir=options.staticDir||path.join(import.meta.dirname,'public');
  mkdirSync(dataDir,{recursive:true,mode:0o770});
@@ -91,18 +91,22 @@ export function createBierServer(options={}) {
  const cached=new Map();
  const getPhoto=db.prepare("SELECT json_extract(data,'$.photo') AS photo FROM beers WHERE id=?");
  const publicBeers=db.prepare("SELECT json_remove(data,'$.photo') AS data,json_type(data,'$.photo')='text' AS hasPhoto FROM beers WHERE json_extract(data,'$.quantity')>0 ORDER BY updated_at DESC");
- if(!db.prepare("PRAGMA table_info(wishlist)").all().some(column=>column.name==='wanted_years')){
+ const wishColumns=new Set(db.prepare('PRAGMA table_info(wishlist)').all().map(column=>column.name));
+ if(!wishColumns.has('wanted_years')){
   db.exec("ALTER TABLE wishlist ADD COLUMN wanted_years TEXT NOT NULL DEFAULT '[]'");
  }
- if(!db.prepare("PRAGMA table_info(wishlist)").all().some(column=>column.name==='details')){
+ if(!wishColumns.has('details')){
   db.exec("ALTER TABLE wishlist ADD COLUMN details TEXT");
  }
- const wishlist=db.prepare('SELECT id,name,brewery,url,added_at AS addedAt,wanted_years AS years,details FROM wishlist ORDER BY added_at DESC');
- const wishes=()=>wishlist.all().map(row=>({...row,years:JSON.parse(row.years),details:JSON.parse(row.details)}));
+ if(!wishColumns.has('shop_offers'))db.exec('ALTER TABLE wishlist ADD COLUMN shop_offers TEXT');
+ const wishlist=db.prepare('SELECT id,name,brewery,url,added_at AS addedAt,wanted_years AS years,details,shop_offers AS shopPrices FROM wishlist ORDER BY added_at DESC');
+ const wishes=()=>wishlist.all().map(row=>({...row,years:JSON.parse(row.years),details:JSON.parse(row.details),shopPrices:JSON.parse(row.shopPrices)}));
  const addWish=db.prepare('INSERT OR IGNORE INTO wishlist(id,name,brewery,url,added_at,wanted_years) VALUES(?,?,?,?,?,?)');
- const updateWish=db.prepare('UPDATE wishlist SET wanted_years=? WHERE id=?');
- const findWish=db.prepare('SELECT url,details FROM wishlist WHERE id=?');
+ const updateWish=db.prepare('UPDATE wishlist SET shop_offers=CASE WHEN wanted_years=? THEN shop_offers ELSE NULL END,wanted_years=? WHERE id=?');
+ const findWish=db.prepare('SELECT name,brewery,url,details,wanted_years AS years FROM wishlist WHERE id=?');
  const writeWishDetails=db.prepare('UPDATE wishlist SET details=? WHERE id=?');
+ const writeWishOffers=db.prepare('UPDATE wishlist SET shop_offers=? WHERE id=? AND wanted_years=?');
+ const wishPriceRefreshes=new Map();
  const removeWish=db.prepare('DELETE FROM wishlist WHERE id=?');
  function wantedYears(input){
   if(!Array.isArray(input)||input.length>200||input.some(year=>!Number.isInteger(year)||year<1900||year>2099))return null;
@@ -147,7 +151,7 @@ export function createBierServer(options={}) {
   try{
    const host=String(req.headers.host||'');
    // No auth headers are trusted: Cloudflare forwards the public Host unchanged.
-   const requestOrigin=publicOrigin&&host===new URL(publicOrigin).host?publicOrigin:'http://'+host;
+   const requestOrigin=host===new URL(publicOrigin).host?publicOrigin:'http://'+host;
    const url=new URL(req.url||'/',requestOrigin);
    if(url.pathname==='/health'&&req.method==='GET')return json(res,200,{ok:true});
    if(!origins.has(requestOrigin))return json(res,421,{error:'Onbekend websiteadres.'});
@@ -202,6 +206,24 @@ export function createBierServer(options={}) {
    }
    if(url.pathname.startsWith('/api/')){
     if(!authenticated(req))return json(res,401,{error:'Meld je eerst aan om je collectie te openen.'});
+    if(url.pathname==='/api/wishlist/shop-prices'&&req.method==='POST'){
+     const {id}=await body(req,2000)??{};
+     const row=typeof id==='string'&&id.length<=80?findWish.get(id):null;
+     if(!row)return json(res,404,{error:'Dit bier staat niet meer op je wishlist.'});
+     if(!row.brewery)return json(res,400,{error:'De brouwerij is nodig om dit bier bij webshops te herkennen.'});
+     let pending=wishPriceRefreshes.get(id);
+     if(!pending){
+      if(wishPriceRefreshes.size>=2||!allow('wishlist-prices',16,60000))return json(res,429,{error:'Wacht even en probeer opnieuw.'});
+      pending=fetchWishOffers({...row,years:JSON.parse(row.years)},options.shopFetcher)
+       .then(snapshot=>writeWishOffers.run(JSON.stringify(snapshot),id,row.years).changes)
+       .finally(()=>wishPriceRefreshes.delete(id));
+      wishPriceRefreshes.set(id,pending);
+     }
+     try{
+      if(!await pending)return json(res,409,{error:'Dit bier is intussen gewijzigd. Zoek opnieuw naar winkelprijzen.'});
+      return json(res,200,wishes());
+     }catch{return json(res,502,{error:'De webshops zijn tijdelijk onbereikbaar.'});}
+    }
     if(url.pathname==='/api/wishlist/details'&&['POST','PUT'].includes(req.method)){
      const input=await body(req,6000);
      const row=typeof input?.id==='string'&&input.id.length<=80?findWish.get(input.id):null;
@@ -241,7 +263,7 @@ export function createBierServer(options={}) {
      const input=await body(req,6000);
      const years=wantedYears(input?.years);
      if(typeof input?.id!=='string'||input.id.length>80||!years)return json(res,400,{error:'Gebruik geldige jaartallen tussen 1900 en 2099.'});
-     if(!updateWish.run(years,input.id).changes)return json(res,404,{error:'Dit bier staat niet meer op je wishlist.'});
+     if(!updateWish.run(years,years,input.id).changes)return json(res,404,{error:'Dit bier staat niet meer op je wishlist.'});
      return json(res,200,wishes());
     }
     if(url.pathname==='/api/wishlist'&&req.method==='DELETE'){

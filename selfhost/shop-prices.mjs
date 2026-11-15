@@ -15,6 +15,12 @@ const goudenbandShops=[
 const editions={2:'2016',4:'2017',5:'2019',6:'2020',7:'2021',8:'2022',9:'2022'};
 const volumePattern=/(?<!\d)(\d+(?:[.,]\d+)?)\s*(ml|cl|l)\b/gi;
 const yearPattern=/\b(?:19|20)\d{2}\b/g;
+const wishPages=[
+ {brewery:'Orval',name:'Orval',productName:'Orval Trappist',volume:330,source:'Belgian Beer Factory',url:'https://www.belgianbeerfactory.com/nl/orval-trappist-33cl.html'},
+ {brewery:'Orval',name:'Orval',volume:330,source:'Belgian Beer Heaven',url:'https://www.belgianbeerheaven.com/be/nl/producten/orval-33cl'},
+ {brewery:'Verhaeghe',name:'Duchesse de Bourgogne',volume:250,source:'Belgian Beer Factory',url:'https://www.belgianbeerfactory.com/nl/duchesse-de-bourgogne-25cl.html'},
+ {brewery:'Verhaeghe',name:'Duchesse de Bourgogne',volume:750,source:'Belgian Beer Heaven',url:'https://www.belgianbeerheaven.com/be/nl/producten/duchesse-de-bourgogne-75cl-ow'},
+];
 
 function plain(value){
  return String(value??'').replace(/&#(\d{1,6});/g,(_,code)=>Number(code)<=0x10ffff?String.fromCodePoint(Number(code)):' ')
@@ -99,6 +105,47 @@ async function searchCatalog(shop,query,fetcher,signal){
  return offers;
 }
 
+export async function fetchWishOffers(wish,fetcher=fetch){
+ const wishBrewery=value=>value==='d orval'?'orval':value;
+ const brewery=wishBrewery(breweryName(wish.brewery));
+ const title=titleKey(wish.name,brewery);
+ const years=[...new Set(plain(wish.name).match(yearPattern)??[])];
+ const edition=editionYear(title,brewery);
+ const wanted=years.length===1?[Number(years[0])]:edition?[Number(edition)]:wish.years;
+ const checkedAt=new Date().toISOString();
+ if(!brewery||!title||years.length>1)return {checkedAt,offers:[],partial:false};
+
+ const signal=AbortSignal.timeout(15000);
+ const query=brewery==='boon'&&/^black label \d+$/.test(title)?'black label':title===brewery?title:`${brewery} ${title}`;
+ const pages=wishPages.filter(page=>breweryName(page.brewery)===brewery&&titleKey(page.name,brewery)===title);
+ if(brewery==='liefmans'&&title==='goudenband'){
+  for(const shop of goudenbandShops){
+   for(const [url,volume] of shop.pages)pages.push({brewery,name:'Goudenband',url,volume,source:shop.name});
+  }
+ }
+ const results=await Promise.allSettled([
+  ...shops.map(shop=>searchCatalog(shop,query,fetcher,signal)),
+  ...pages.map(page=>readProductOffer(page,fetcher,signal)),
+ ]);
+ const partial=results.some(result=>result.status==='rejected');
+ if(results.every(result=>result.status==='rejected'))throw Error('De winkelcatalogi zijn niet bereikbaar');
+
+ const offers=new Map();
+ for(const result of results){
+  if(result.status!=='fulfilled')continue;
+  for(const offer of [result.value].flat().filter(Boolean)){
+   const [producer,name,volume,vintage]=JSON.parse(offer.key);
+   const year=vintage?Number(vintage):null;
+   if(wishBrewery(producer)!==brewery||name!==title||(year&&wanted.length&&!wanted.includes(year)))continue;
+   const key=JSON.stringify([offer.source,volume,year]);
+   if(!offers.has(key)||offers.get(key).amount>offer.amount){
+    offers.set(key,{amount:offer.amount,source:offer.source,url:offer.url,volume,year});
+   }
+  }
+ }
+ return {checkedAt,partial,offers:[...offers.values()].sort((a,b)=>a.volume-b.volume||(a.year??0)-(b.year??0)||a.amount-b.amount).slice(0,50)};
+}
+
 export async function fetchShopPrices(beers,fetcher=fetch){
  const checkedAt=new Date().toISOString();
  const keys=new Set(beers.map(priceKey).filter(Boolean));
@@ -122,7 +169,7 @@ export async function fetchShopPrices(beers,fetcher=fetch){
   sources.push(source);
   await Promise.all(shop.pages.map(async([url,volume])=>{
    try{
-    const offer=await readGoudenbandOffer(url,volume,shop.name,fetcher,signal);
+    const offer=await readProductOffer({url,volume,source:shop.name,brewery:'Liefmans',name:'Goudenband'},fetcher,signal);
     successful++;
     if(offer)collect(offer);
    }catch{source.available=false;}
@@ -152,7 +199,7 @@ export async function fetchShopPrices(beers,fetcher=fetch){
  return {checkedAt,sources,offers,keys:[...keys],scanned:beers.length};
 }
 
-async function readGoudenbandOffer(url,volume,source,fetcher,signal){
+async function readProductOffer({url,volume,source,brewery,name,productName=name},fetcher,signal){
  const response=await fetcher(url,{headers:{Accept:'text/html'},redirect:'error',signal});
  if(!response.ok)throw Error('Productpagina onbereikbaar');
  const html=await response.text();
@@ -166,12 +213,13 @@ async function readGoudenbandOffer(url,volume,source,fetcher,signal){
  for(const [,content] of html.matchAll(/<script\b[^>]*\btype=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)){
   try{scan(JSON.parse(content));}catch{}
  }
- const key=priceKey({brewery:'Liefmans',name:'Goudenband',volume});
+ const key=priceKey({brewery,name,volume});
+ const productKey=priceKey({brewery,name:productName,volume});
  const product=products.find(item=>typeof item.name==='string'&&
-  priceKey({brewery:'Liefmans',name:item.name,volume})===key&&
+  priceKey({brewery,name:item.name.replace(/\s+OW$/i,''),volume})===productKey&&
   ([...item.name.matchAll(volumePattern)].some(([,value,unit])=>Number(value.replace(',','.'))*({ml:1,cl:10,l:1000}[unit.toLowerCase()])===volume)||
    [item.offers].flat().some(offer=>offer?.url===url)));
- if(!product)throw Error('Geen herkenbare Goudenband op de productpagina');
+ if(!product)throw Error('Geen herkenbaar bier op de productpagina');
  const amounts=[product.offers].flat().filter(offer=>offer?.priceCurrency==='EUR'&&/(?:^|\/)InStock$/i.test(offer.availability??''))
   .map(offer=>Number(offer.price)).filter(amount=>Number.isFinite(amount)&&amount>0);
  return amounts.length?{key,amount:Math.min(...amounts),source,url}:null;
